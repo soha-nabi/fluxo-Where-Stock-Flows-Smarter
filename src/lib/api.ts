@@ -80,14 +80,14 @@ apiClient.interceptors.response.use(
   (response) => response,
   (error: AxiosError<any>) => {
     if (process.env.NODE_ENV === "development") {
-      console.error("[API Error Interceptor]:", {
-        url: error.config?.url,
-        method: error.config?.method,
-        status: error.response?.status,
-        data: error.response?.data,
-        message: error.message,
+      console.warn("[API Network Info]:", {
+        url: error.config?.url || "unknown endpoint",
+        method: error.config?.method?.toUpperCase() || "GET",
+        status: error.response?.status || "OFFLINE_FALLBACK",
+        message: error.message || "Network Connection Error",
       });
     }
+
 
     if (error.response) {
       const { status, data } = error.response;

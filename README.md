@@ -9,6 +9,7 @@
 
 **FLUXO** is an enterprise-grade, Apple-inspired Intelligent Warehouse Logistics & Inventory Orchestration System. Built for high-frequency multi-warehouse operations, FLUXO unifies inbound receiving, outbound delivery pipelines, inter-warehouse transfers, inventory reconciliation adjustments, and real-time audit ledger tracking with sub-millisecond responsiveness and state-of-the-art dark mode visual polish.
 
+https://fluxo-ai-beta.vercel.app/
 ---
 
 ## 📖 Table of Contents

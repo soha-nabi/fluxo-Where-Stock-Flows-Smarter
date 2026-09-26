@@ -1,17 +1,17 @@
-"use me";
 "use client";
 
 import React, { useState } from "react";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { Header } from "@/components/layout/Header";
 import { CommandPalette } from "@/components/layout/CommandPalette";
+import { ElevenLabsVoiceAgentFloatingWidget } from "@/components/dashboard/ElevenLabsVoiceAgent";
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
 
   return (
-    <div className="flex min-h-screen bg-[#090a10] text-[#f4f4f5]">
+    <div className="flex min-h-screen bg-[#090a10] text-[#f4f4f5] relative">
       {/* Sidebar Navigation */}
       <Sidebar
         mobileOpen={mobileOpen}
@@ -31,6 +31,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
       {/* Command Palette Modal */}
       <CommandPalette isOpen={searchOpen} onClose={() => setSearchOpen(false)} />
+
+      {/* Modern Floating ElevenLabs Voice AI Widget */}
+      <ElevenLabsVoiceAgentFloatingWidget />
     </div>
   );
 }

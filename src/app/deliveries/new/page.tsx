@@ -38,10 +38,12 @@ export default function CreateDeliveryPage() {
   useEffect(() => {
     fetchProducts();
     warehousesApi.getWarehouses().then((res) => {
-      setWarehouses(res || []);
-      if (res && res.length > 0) setWarehouseId(res[0].id);
-    });
+      const list = Array.isArray(res) ? res : (res as any)?.data || [];
+      setWarehouses(list);
+      if (list.length > 0) setWarehouseId(list[0].id);
+    }).catch(() => setWarehouses([]));
   }, [fetchProducts]);
+
 
   const handleAddItem = () => {
     if (!selectedProductId) return;
@@ -146,7 +148,7 @@ export default function CreateDeliveryPage() {
                   onChange={(e) => setWarehouseId(e.target.value)}
                   className="w-full px-3.5 py-2.5 rounded-xl bg-[#181a2e] border border-[#2b2f4c] text-white focus:outline-none focus:border-purple-500"
                 >
-                  {warehouses.map((w) => (
+                  {(Array.isArray(warehouses) ? warehouses : []).map((w) => (
                     <option key={w.id} value={w.id}>
                       {w.name} ({w.code})
                     </option>
@@ -170,12 +172,13 @@ export default function CreateDeliveryPage() {
                     className="w-full px-3 py-2 rounded-xl bg-[#181a2e] border border-[#2b2f4c] text-white text-xs"
                   >
                     <option value="">-- Choose Product --</option>
-                    {products.map((p) => (
+                    {(Array.isArray(products) ? products : []).map((p) => (
                       <option key={p.id} value={p.id}>
                         {p.sku} — {p.name} (In Stock: {p.total_stock || 0})
                       </option>
                     ))}
                   </select>
+
                 </div>
 
                 <div>

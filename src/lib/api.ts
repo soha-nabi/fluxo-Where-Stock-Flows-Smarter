@@ -134,13 +134,14 @@ async function extractData<T>(promise: Promise<any>): Promise<T> {
   const res = await promise;
   if (res && res.data !== undefined) {
     const payload = res.data;
-    if (payload && typeof payload === "object" && "data" in payload && payload.status) {
+    if (payload && typeof payload === "object" && "data" in payload && payload.data !== undefined) {
       return payload.data as T;
     }
     return payload as T;
   }
   return res as T;
 }
+
 
 // ==========================================
 // 4. DOMAIN TYPES & INTERFACES
@@ -199,6 +200,16 @@ export interface WarehouseInput {
   city?: string;
   capacity: number;
 }
+
+// --- SUPPLIERS ---
+export interface Supplier {
+  id: string;
+  name: string;
+  contact_email?: string;
+  contact_phone?: string;
+  lead_time_days?: number;
+}
+
 
 // --- STOCK ---
 export interface StockData {
@@ -524,6 +535,19 @@ export const warehousesApi = {
   updateWarehouse: (id: string, data: WarehouseInput | Partial<WarehouseInput>): Promise<Warehouse> =>
     extractData<Warehouse>(apiClient.patch(`/api/v1/warehouses/${id}`, data)),
 };
+
+// --- SUPPLIERS ---
+export const suppliersApi = {
+  getSuppliers: (signal?: AbortSignal): Promise<Supplier[]> =>
+    extractData<Supplier[]>(apiClient.get("/api/v1/suppliers", { signal })),
+};
+
+// --- HEALTH CHECK ---
+export const healthApi = {
+  getHealth: (): Promise<{ status: string; database: string; timestamp: string }> =>
+    apiClient.get("/api/v1/health").then((res) => res.data),
+};
+
 
 // --- STOCK ---
 export const stockApi = {

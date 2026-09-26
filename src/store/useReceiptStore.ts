@@ -53,15 +53,16 @@ export const useReceiptStore = create<ReceiptState>((set, get) => ({
       if (process.env.NODE_ENV === "development") {
         console.log("[ReceiptStore] Fetching receipts with filters:", filters);
       }
-      const data = await receiptsApi.getReceipts(filters);
-      set({ receipts: data || [], loading: false, lastFetched: now });
-      return data;
+      const raw = await receiptsApi.getReceipts(filters);
+      const list = Array.isArray(raw) ? raw : (raw as any)?.data || [];
+      set({ receipts: list, loading: false, lastFetched: now });
+      return list;
     } catch (err: any) {
       const errorMessage = err?.message || "Failed to fetch receipts.";
       if (process.env.NODE_ENV === "development") {
         console.error("[ReceiptStore] fetchReceipts Error:", err);
       }
-      set({ error: errorMessage, loading: false });
+      set({ receipts: get().receipts || [], error: errorMessage, loading: false });
     }
   },
 

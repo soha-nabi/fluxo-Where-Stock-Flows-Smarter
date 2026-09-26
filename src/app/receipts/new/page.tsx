@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { AppShell } from "@/components/layout/AppShell";
 import { useReceiptStore, useProductStore } from "@/store";
-import { warehousesApi, Warehouse, Product, ReceiptItemInput } from "@/lib/api";
+import { warehousesApi, suppliersApi, Warehouse, Supplier, Product, ReceiptItemInput } from "@/lib/api";
 import {
   ArrowLeft,
   ArrowDownLeft,
@@ -24,7 +24,8 @@ export default function CreateReceiptPage() {
   const { products, fetchProducts } = useProductStore();
 
   const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
-  const [supplierId, setSupplierId] = useState("SUP-101 (Acme Supply Co)");
+  const [suppliers, setSuppliers] = useState<Supplier[]>([]);
+  const [supplierId, setSupplierId] = useState("");
   const [warehouseId, setWarehouseId] = useState("");
   const [notes, setNotes] = useState("");
   const [items, setItems] = useState<ReceiptItemInput[]>([]);
@@ -39,10 +40,18 @@ export default function CreateReceiptPage() {
   useEffect(() => {
     fetchProducts();
     warehousesApi.getWarehouses().then((res) => {
-      setWarehouses(res || []);
-      if (res && res.length > 0) setWarehouseId(res[0].id);
-    });
+      const list = Array.isArray(res) ? res : (res as any)?.data || [];
+      setWarehouses(list);
+      if (list.length > 0) setWarehouseId(list[0].id);
+    }).catch(() => setWarehouses([]));
+
+    suppliersApi.getSuppliers().then((res) => {
+      const list = Array.isArray(res) ? res : (res as any)?.data || [];
+      setSuppliers(list);
+      if (list.length > 0) setSupplierId(list[0].id);
+    }).catch(() => setSuppliers([]));
   }, [fetchProducts]);
+
 
   const handleAddItem = () => {
     if (!selectedProductId) return;
@@ -133,13 +142,19 @@ export default function CreateReceiptPage() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
                 <label className="block text-gray-400 mb-1 font-medium">Supplier *</label>
-                <input
-                  type="text"
+                <select
                   required
                   value={supplierId}
                   onChange={(e) => setSupplierId(e.target.value)}
                   className="w-full px-3.5 py-2.5 rounded-xl bg-[#181a2e] border border-[#2b2f4c] text-white focus:outline-none focus:border-purple-500"
-                />
+                >
+                  <option value="">-- Select Supplier --</option>
+                  {(Array.isArray(suppliers) ? suppliers : []).map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name} {s.contact_email ? `(${s.contact_email})` : ""}
+                    </option>
+                  ))}
+                </select>
               </div>
 
               <div>
@@ -150,7 +165,7 @@ export default function CreateReceiptPage() {
                   onChange={(e) => setWarehouseId(e.target.value)}
                   className="w-full px-3.5 py-2.5 rounded-xl bg-[#181a2e] border border-[#2b2f4c] text-white focus:outline-none focus:border-purple-500"
                 >
-                  {warehouses.map((w) => (
+                  {(Array.isArray(warehouses) ? warehouses : []).map((w) => (
                     <option key={w.id} value={w.id}>
                       {w.name} ({w.code})
                     </option>
@@ -174,12 +189,13 @@ export default function CreateReceiptPage() {
                     className="w-full px-3 py-2 rounded-xl bg-[#181a2e] border border-[#2b2f4c] text-white text-xs"
                   >
                     <option value="">-- Choose Product --</option>
-                    {products.map((p) => (
+                    {(Array.isArray(products) ? products : []).map((p) => (
                       <option key={p.id} value={p.id}>
                         {p.sku} — {p.name} (Reorder Level: {p.reorder_level})
                       </option>
                     ))}
                   </select>
+
                 </div>
 
                 <div>

@@ -54,15 +54,16 @@ export const useDeliveryStore = create<DeliveryState>((set, get) => ({
       if (process.env.NODE_ENV === "development") {
         console.log("[DeliveryStore] Fetching deliveries with filters:", filters);
       }
-      const data = await deliveriesApi.getDeliveries(filters);
-      set({ deliveries: data || [], loading: false, lastFetched: now });
-      return data;
+      const raw = await deliveriesApi.getDeliveries(filters);
+      const list = Array.isArray(raw) ? raw : (raw as any)?.data || [];
+      set({ deliveries: list, loading: false, lastFetched: now });
+      return list;
     } catch (err: any) {
       const errorMessage = err?.message || "Failed to fetch deliveries.";
       if (process.env.NODE_ENV === "development") {
         console.error("[DeliveryStore] fetchDeliveries Error:", err);
       }
-      set({ error: errorMessage, loading: false });
+      set({ deliveries: get().deliveries || [], error: errorMessage, loading: false });
     }
   },
 

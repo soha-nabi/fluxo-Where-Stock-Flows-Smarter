@@ -31,7 +31,10 @@ export default function ReceiptsPage() {
     warehousesApi.getWarehouses().then((res) => setWarehouses(res || [])).catch(() => {});
   }, [fetchReceipts]);
 
-  const filteredReceipts = receipts.filter((r) => {
+  const receiptsList = Array.isArray(receipts) ? receipts : [];
+  const warehouseList = Array.isArray(warehouses) ? warehouses : [];
+
+  const filteredReceipts = receiptsList.filter((r) => {
     const matchesStatus = statusFilter === "ALL" || r.status === statusFilter;
     const matchesWarehouse = warehouseFilter === "ALL" || r.warehouse_id === warehouseFilter;
     const matchesSearch =
@@ -39,6 +42,7 @@ export default function ReceiptsPage() {
       (r.supplier_name && r.supplier_name.toLowerCase().includes(searchTerm.toLowerCase()));
     return matchesStatus && matchesWarehouse && matchesSearch;
   });
+
 
   const recentReceipts = [...filteredReceipts].slice(0, 10);
 
@@ -159,11 +163,12 @@ export default function ReceiptsPage() {
               className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-[#141624] border border-[#23263b] text-xs text-white focus:outline-none focus:border-purple-500 appearance-none cursor-pointer"
             >
               <option value="ALL">All Destination Warehouses</option>
-              {warehouses.map((w) => (
+              {warehouseList.map((w) => (
                 <option key={w.id} value={w.id}>
                   {w.name}
                 </option>
               ))}
+
             </select>
           </div>
         </div>

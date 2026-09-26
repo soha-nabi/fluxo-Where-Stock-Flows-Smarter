@@ -1,14 +1,18 @@
+import logging
 from typing import List, Optional
 from datetime import datetime, timezone, timedelta
 from fastapi import FastAPI, Depends, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
-from sqlalchemy import or_, func, desc
+from sqlalchemy import or_, func, desc, text
 
 import models
 import schemas
 from database import engine, get_db, Base
 from seed import seed_db
+
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
 
 # Create database tables & seed initial workflow records
 Base.metadata.create_all(bind=engine)
@@ -23,7 +27,7 @@ app = FastAPI(
 # Enable CORS for Next.js frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["http://localhost:3000", "http://localhost:3001", "http://127.0.0.1:3000", "http://127.0.0.1:3001", "*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -34,8 +38,54 @@ def utc_now():
 
 @app.get("/")
 def root():
-    return {"status": "success", "message": "FLUXO Production Engine Running", "version": "1.0.0"}
+    logger.debug("GET / called")
+    return {
+        "status": "success",
+        "message": "FLUXO Production Engine Running",
+        "version": "1.0.0",
+        "timestamp": utc_now().isoformat()
+    }
 
+@app.get("/api/v1/health")
+def health_check(db: Session = Depends(get_db)):
+    logger.debug("GET /api/v1/health called")
+    db_status = "connected"
+    try:
+        db.execute(text("SELECT 1"))
+    except Exception as e:
+        logger.error(f"Health check DB error: {e}")
+        db_status = "error"
+
+    return {
+        "status": "success",
+        "database": db_status,
+        "timestamp": utc_now().isoformat()
+    }
+
+# ==========================================
+# 0. SUPPLIERS API (/api/v1/suppliers)
+# ==========================================
+
+@app.get("/api/v1/suppliers")
+def get_suppliers(db: Session = Depends(get_db)):
+    logger.debug("GET /api/v1/suppliers called")
+    suppliers = db.query(models.Supplier).filter(models.Supplier.is_active == True).all()
+    data = [
+        {
+            "id": s.id,
+            "name": s.name,
+            "contact_email": s.contact_email,
+            "contact_phone": s.contact_phone,
+            "lead_time_days": s.lead_time_days
+        }
+        for s in suppliers
+    ]
+    return {
+        "status": "success",
+        "data": data,
+        "message": "Suppliers retrieved successfully",
+        "timestamp": utc_now().isoformat()
+    }
 
 # ==========================================
 # 1. PRODUCTS API (/api/v1/products)
@@ -50,11 +100,12 @@ def get_products(
     sort_by: str = Query("created_at"),
     db: Session = Depends(get_db),
 ):
+    logger.debug(f"GET /api/v1/products called with search={search}, category={category}")
     query = db.query(models.Product)
     if search:
         fmt = f"%{search}%"
         query = query.filter(or_(models.Product.sku.ilike(fmt), models.Product.name.ilike(fmt)))
-    if category:
+    if category and category != "ALL":
         query = query.filter(models.Product.category == category)
 
     if hasattr(models.Product, sort_by):
@@ -71,8 +122,10 @@ def get_products(
         stocks = db.query(models.Stock).filter(models.Stock.product_id == p.id).all()
         wh_summaries = []
         tot_stock = 0
+        tot_reserved = 0
         for s in stocks:
             tot_stock += s.quantity
+            tot_reserved += s.quantity_reserved
             wh_name = s.warehouse.name if s.warehouse else "Warehouse"
             wh_summaries.append({
                 "warehouse": wh_name,
@@ -88,16 +141,26 @@ def get_products(
             "unit": p.unit_of_measure,
             "reorder_level": p.reorder_level,
             "total_stock": tot_stock,
+            "stock_available": max(0, tot_stock - tot_reserved),
             "warehouses": wh_summaries,
             "image_url": p.image_url,
-            "created_at": p.created_at
+            "created_at": p.created_at.isoformat() if p.created_at else None
         })
 
-    return {"total": total, "page": page, "limit": limit, "data": data}
+    return {
+        "status": "success",
+        "total": total,
+        "page": page,
+        "limit": limit,
+        "data": data,
+        "message": "Products retrieved successfully",
+        "timestamp": utc_now().isoformat()
+    }
 
 
 @app.post("/api/v1/products", status_code=status.HTTP_201_CREATED)
 def create_product(product_in: schemas.ProductCreate, db: Session = Depends(get_db)):
+    logger.debug(f"POST /api/v1/products called: {product_in.name}")
     existing = db.query(models.Product).filter(models.Product.sku == product_in.sku).first()
     if existing:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Product SKU already exists.")
@@ -114,11 +177,27 @@ def create_product(product_in: schemas.ProductCreate, db: Session = Depends(get_
     db.add(product)
     db.commit()
     db.refresh(product)
-    return {"status": "success", "data": product, "message": "Product created successfully"}
+    return {
+        "status": "success",
+        "data": {
+            "id": product.id,
+            "sku": product.sku,
+            "name": product.name,
+            "category": product.category,
+            "unit": product.unit_of_measure,
+            "reorder_level": product.reorder_level,
+            "description": product.description,
+            "image_url": product.image_url,
+            "created_at": product.created_at.isoformat() if product.created_at else None
+        },
+        "message": "Product created successfully",
+        "timestamp": utc_now().isoformat()
+    }
 
 
 @app.get("/api/v1/products/{product_id}")
 def get_product(product_id: str, db: Session = Depends(get_db)):
+    logger.debug(f"GET /api/v1/products/{product_id} called")
     product = db.query(models.Product).filter(models.Product.id == product_id).first()
     if not product:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found.")
@@ -137,22 +216,28 @@ def get_product(product_id: str, db: Session = Depends(get_db)):
         })
 
     return {
-        "id": product.id,
-        "sku": product.sku,
-        "name": product.name,
-        "category": product.category,
-        "unit": product.unit_of_measure,
-        "reorder_level": product.reorder_level,
-        "total_stock": tot_stock,
-        "locations": location_breakdown,
-        "description": product.description,
-        "image_url": product.image_url,
-        "created_at": product.created_at
+        "status": "success",
+        "data": {
+            "id": product.id,
+            "sku": product.sku,
+            "name": product.name,
+            "category": product.category,
+            "unit": product.unit_of_measure,
+            "reorder_level": product.reorder_level,
+            "total_stock": tot_stock,
+            "locations": location_breakdown,
+            "description": product.description,
+            "image_url": product.image_url,
+            "created_at": product.created_at.isoformat() if product.created_at else None
+        },
+        "message": "Product retrieved successfully",
+        "timestamp": utc_now().isoformat()
     }
 
 
 @app.patch("/api/v1/products/{product_id}")
 def update_product(product_id: str, update_in: schemas.ProductUpdate, db: Session = Depends(get_db)):
+    logger.debug(f"PATCH /api/v1/products/{product_id} called")
     product = db.query(models.Product).filter(models.Product.id == product_id).first()
     if not product:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found.")
@@ -163,11 +248,27 @@ def update_product(product_id: str, update_in: schemas.ProductUpdate, db: Sessio
 
     db.commit()
     db.refresh(product)
-    return {"status": "success", "data": product, "message": "Product updated"}
+    return {
+        "status": "success",
+        "data": {
+            "id": product.id,
+            "sku": product.sku,
+            "name": product.name,
+            "category": product.category,
+            "unit": product.unit_of_measure,
+            "reorder_level": product.reorder_level,
+            "description": product.description,
+            "image_url": product.image_url,
+            "created_at": product.created_at.isoformat() if product.created_at else None
+        },
+        "message": "Product updated",
+        "timestamp": utc_now().isoformat()
+    }
 
 
-@app.delete("/api/v1/products/{product_id}", status_code=status.HTTP_204_NO_CONTENT)
+@app.delete("/api/v1/products/{product_id}", status_code=status.HTTP_200_OK)
 def delete_product(product_id: str, db: Session = Depends(get_db)):
+    logger.debug(f"DELETE /api/v1/products/{product_id} called")
     product = db.query(models.Product).filter(models.Product.id == product_id).first()
     if not product:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found.")
@@ -178,7 +279,12 @@ def delete_product(product_id: str, db: Session = Depends(get_db)):
 
     db.delete(product)
     db.commit()
-    return None
+    return {
+        "status": "success",
+        "data": None,
+        "message": "Product deleted",
+        "timestamp": utc_now().isoformat()
+    }
 
 
 # ==========================================
@@ -187,6 +293,7 @@ def delete_product(product_id: str, db: Session = Depends(get_db)):
 
 @app.get("/api/v1/warehouses")
 def get_warehouses(db: Session = Depends(get_db)):
+    logger.debug("GET /api/v1/warehouses called")
     warehouses = db.query(models.Warehouse).all()
     result = []
     for wh in warehouses:
@@ -199,17 +306,24 @@ def get_warehouses(db: Session = Depends(get_db)):
             "name": wh.name,
             "code": wh.code,
             "city": wh.city,
+            "address": wh.address,
             "capacity": wh.capacity,
             "sku_count": sku_cnt,
             "capacity_utilization": min(utilization, 100.0),
             "health_score": 95,
             "is_active": wh.is_active
         })
-    return {"data": result}
+    return {
+        "status": "success",
+        "data": result,
+        "message": "Warehouses retrieved successfully",
+        "timestamp": utc_now().isoformat()
+    }
 
 
 @app.post("/api/v1/warehouses", status_code=status.HTTP_201_CREATED)
 def create_warehouse(wh_in: schemas.WarehouseCreate, db: Session = Depends(get_db)):
+    logger.debug(f"POST /api/v1/warehouses called: {wh_in.name}")
     if len(wh_in.code) < 3 or len(wh_in.code) > 10:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Warehouse code must be 3-10 characters.")
     existing = db.query(models.Warehouse).filter(models.Warehouse.code == wh_in.code).first()
@@ -220,30 +334,42 @@ def create_warehouse(wh_in: schemas.WarehouseCreate, db: Session = Depends(get_d
     db.add(wh)
     db.commit()
     db.refresh(wh)
-    return {"status": "success", "data": wh, "message": "Warehouse created"}
+    return {
+        "status": "success",
+        "data": wh,
+        "message": "Warehouse created",
+        "timestamp": utc_now().isoformat()
+    }
 
 
 @app.get("/api/v1/warehouses/{warehouse_id}")
 def get_warehouse(warehouse_id: str, db: Session = Depends(get_db)):
+    logger.debug(f"GET /api/v1/warehouses/{warehouse_id} called")
     wh = db.query(models.Warehouse).filter(models.Warehouse.id == warehouse_id).first()
     if not wh:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Warehouse not found.")
 
     locs = db.query(models.Location).filter(models.Location.warehouse_id == warehouse_id).all()
     return {
-        "id": wh.id,
-        "name": wh.name,
-        "code": wh.code,
-        "city": wh.city,
-        "address": wh.address,
-        "capacity": wh.capacity,
-        "locations": [{"id": l.id, "name": l.name, "code": l.code, "type": l.location_type} for l in locs],
-        "is_active": wh.is_active
+        "status": "success",
+        "data": {
+            "id": wh.id,
+            "name": wh.name,
+            "code": wh.code,
+            "city": wh.city,
+            "address": wh.address,
+            "capacity": wh.capacity,
+            "locations": [{"id": l.id, "name": l.name, "code": l.code, "type": l.location_type} for l in locs],
+            "is_active": wh.is_active
+        },
+        "message": "Warehouse retrieved successfully",
+        "timestamp": utc_now().isoformat()
     }
 
 
 @app.patch("/api/v1/warehouses/{warehouse_id}")
 def update_warehouse(warehouse_id: str, update_in: schemas.WarehouseUpdate, db: Session = Depends(get_db)):
+    logger.debug(f"PATCH /api/v1/warehouses/{warehouse_id} called")
     wh = db.query(models.Warehouse).filter(models.Warehouse.id == warehouse_id).first()
     if not wh:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Warehouse not found.")
@@ -253,15 +379,21 @@ def update_warehouse(warehouse_id: str, update_in: schemas.WarehouseUpdate, db: 
 
     db.commit()
     db.refresh(wh)
-    return {"status": "success", "data": wh, "message": "Warehouse updated"}
+    return {
+        "status": "success",
+        "data": wh,
+        "message": "Warehouse updated",
+        "timestamp": utc_now().isoformat()
+    }
 
 
 # ==========================================
-# 3. LOCATIONS API (/api/v1/warehouses/{wh_id}/locations)
+# 3. LOCATIONS API
 # ==========================================
 
 @app.get("/api/v1/warehouses/{warehouse_id}/locations")
 def get_locations(warehouse_id: str, db: Session = Depends(get_db)):
+    logger.debug(f"GET /api/v1/warehouses/{warehouse_id}/locations called")
     locs = db.query(models.Location).filter(models.Location.warehouse_id == warehouse_id).all()
     result = []
     for l in locs:
@@ -276,41 +408,16 @@ def get_locations(warehouse_id: str, db: Session = Depends(get_db)):
             "is_active": l.is_active,
             "current_stock_quantity": qty
         })
-    return {"data": result}
-
-
-@app.post("/api/v1/warehouses/{warehouse_id}/locations", status_code=status.HTTP_201_CREATED)
-def create_location(warehouse_id: str, loc_in: schemas.LocationCreate, db: Session = Depends(get_db)):
-    existing = db.query(models.Location).filter(
-        models.Location.warehouse_id == warehouse_id,
-        models.Location.code == loc_in.code
-    ).first()
-    if existing:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Location code already exists in warehouse.")
-
-    loc = models.Location(warehouse_id=warehouse_id, **loc_in.model_dump())
-    db.add(loc)
-    db.commit()
-    db.refresh(loc)
-    return {"status": "success", "data": loc, "message": "Location created"}
-
-
-@app.patch("/api/v1/locations/{location_id}")
-def update_location(location_id: str, loc_in: schemas.LocationUpdate, db: Session = Depends(get_db)):
-    loc = db.query(models.Location).filter(models.Location.id == location_id).first()
-    if not loc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Location not found.")
-
-    for field, val in loc_in.model_dump(exclude_unset=True).items():
-        setattr(loc, field, val)
-
-    db.commit()
-    db.refresh(loc)
-    return {"status": "success", "data": loc, "message": "Location updated"}
+    return {
+        "status": "success",
+        "data": result,
+        "message": "Locations retrieved successfully",
+        "timestamp": utc_now().isoformat()
+    }
 
 
 # ==========================================
-# 4. STOCK API (/api/v1/stock)
+# 4. STOCK API
 # ==========================================
 
 @app.get("/api/v1/stock")
@@ -320,6 +427,7 @@ def get_stock(
     location_id: Optional[str] = None,
     db: Session = Depends(get_db)
 ):
+    logger.debug(f"GET /api/v1/stock called")
     query = db.query(models.Stock)
     if product_id:
         query = query.filter(models.Stock.product_id == product_id)
@@ -333,14 +441,18 @@ def get_stock(
         prod = db.query(models.Product).filter(models.Product.id == product_id).first()
         wh = db.query(models.Warehouse).filter(models.Warehouse.id == warehouse_id).first() if warehouse_id else None
         return {
-            "product": {"id": prod.id, "name": prod.name} if prod else None,
-            "warehouse": {"id": wh.id, "name": wh.name} if wh else None,
-            "quantity": 0,
-            "quantity_reserved": 0,
-            "quantity_available": 0,
-            "low_stock": True,
-            "locations": [],
-            "reorder_level": prod.reorder_level if prod else 10
+            "status": "success",
+            "data": {
+                "product": {"id": prod.id, "name": prod.name} if prod else None,
+                "warehouse": {"id": wh.id, "name": wh.name} if wh else None,
+                "quantity": 0,
+                "quantity_reserved": 0,
+                "quantity_available": 0,
+                "low_stock": True,
+                "locations": [],
+                "reorder_level": prod.reorder_level if prod else 10
+            },
+            "timestamp": utc_now().isoformat()
         }
 
     tot_qty = sum(s.quantity for s in stocks)
@@ -351,74 +463,29 @@ def get_stock(
     loc_breakdown = [{"name": s.location.name if s.location else "Default Location", "quantity": s.quantity} for s in stocks]
 
     return {
-        "product": {"id": prod.id, "sku": prod.sku, "name": prod.name} if prod else None,
-        "warehouse": {"id": wh.id, "name": wh.name} if wh else None,
-        "quantity": tot_qty,
-        "quantity_reserved": tot_res,
-        "quantity_available": max(0, tot_qty - tot_res),
-        "low_stock": tot_qty < (prod.reorder_level if prod else 10),
-        "locations": loc_breakdown,
-        "reorder_level": prod.reorder_level if prod else 10,
-        "last_counted_at": stocks[0].last_counted_at if stocks else None
+        "status": "success",
+        "data": {
+            "product": {"id": prod.id, "sku": prod.sku, "name": prod.name} if prod else None,
+            "warehouse": {"id": wh.id, "name": wh.name} if wh else None,
+            "quantity": tot_qty,
+            "quantity_reserved": tot_res,
+            "quantity_available": max(0, tot_qty - tot_res),
+            "low_stock": tot_qty < (prod.reorder_level if prod else 10),
+            "locations": loc_breakdown,
+            "reorder_level": prod.reorder_level if prod else 10,
+            "last_counted_at": stocks[0].last_counted_at.isoformat() if stocks and stocks[0].last_counted_at else None
+        },
+        "timestamp": utc_now().isoformat()
     }
 
 
-@app.post("/api/v1/stock", status_code=status.HTTP_201_CREATED)
-def create_initial_stock(stock_in: schemas.StockInitCreate, db: Session = Depends(get_db)):
-    stock = db.query(models.Stock).filter(
-        models.Stock.product_id == stock_in.product_id,
-        models.Stock.warehouse_id == stock_in.warehouse_id,
-        models.Stock.location_id == stock_in.location_id
-    ).first()
-
-    qty_before = stock.quantity if stock else 0
-    if stock:
-        stock.quantity = stock_in.quantity
-    else:
-        stock = models.Stock(**stock_in.model_dump())
-        db.add(stock)
-
-    db.commit()
-    db.refresh(stock)
-
-    # Immutable Stock Ledger Entry
-    ledger = models.StockLedger(
-        product_id=stock_in.product_id,
-        warehouse_id=stock_in.warehouse_id,
-        location_id=stock_in.location_id,
-        operation_type="INITIAL",
-        quantity_before=qty_before,
-        quantity_after=stock_in.quantity,
-        reference_type="MANUAL",
-        reference_id=stock.id,
-        reference_number="INIT-STOCK",
-        notes="Initial stock allocation",
-        created_by="System"
-    )
-    db.add(ledger)
-    db.commit()
-
-    return {"status": "success", "data": stock, "message": "Initial stock set"}
-
-
-@app.put("/api/v1/stock/{stock_id}")
-def update_stock_location(stock_id: str, update_in: schemas.StockUpdateLocation, db: Session = Depends(get_db)):
-    stock = db.query(models.Stock).filter(models.Stock.id == stock_id).first()
-    if not stock:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Stock record not found.")
-
-    stock.location_id = update_in.location_id
-    db.commit()
-    db.refresh(stock)
-    return {"status": "success", "data": stock, "message": "Stock relocated"}
-
-
 # ==========================================
-# 5. RECEIPTS API (Incoming Stock Workflow)
+# 5. RECEIPTS API
 # ==========================================
 
 @app.post("/api/v1/receipts", status_code=status.HTTP_201_CREATED)
 def create_receipt(receipt_in: schemas.ReceiptCreate, db: Session = Depends(get_db)):
+    logger.debug(f"POST /api/v1/receipts called")
     rcp_cnt = db.query(models.Receipt).count() + 1
     rcp_num = f"RCP-2026-{rcp_cnt:03d}"
 
@@ -449,7 +516,20 @@ def create_receipt(receipt_in: schemas.ReceiptCreate, db: Session = Depends(get_
 
     db.commit()
     db.refresh(rcp)
-    return {"status": "success", "data": rcp, "message": "Receipt draft created"}
+    return {
+        "status": "success",
+        "data": {
+            "id": rcp.id,
+            "receipt_number": rcp.receipt_number,
+            "supplier_id": rcp.supplier_id,
+            "warehouse_id": rcp.warehouse_id,
+            "status": rcp.status,
+            "expected_date": rcp.expected_date.isoformat() if rcp.expected_date else None,
+            "total_items": rcp.total_items
+        },
+        "message": "Receipt draft created",
+        "timestamp": utc_now().isoformat()
+    }
 
 
 @app.get("/api/v1/receipts")
@@ -458,10 +538,11 @@ def get_receipts(
     status_filter: Optional[str] = Query(None, alias="status"),
     db: Session = Depends(get_db)
 ):
+    logger.debug("GET /api/v1/receipts called")
     query = db.query(models.Receipt)
     if warehouse_id:
         query = query.filter(models.Receipt.warehouse_id == warehouse_id)
-    if status_filter:
+    if status_filter and status_filter != "ALL":
         query = query.filter(models.Receipt.status == status_filter)
 
     receipts = query.order_by(desc(models.Receipt.created_at)).all()
@@ -471,18 +552,26 @@ def get_receipts(
         result.append({
             "id": r.id,
             "receipt_number": r.receipt_number,
+            "supplier_id": r.supplier_id,
             "supplier_name": r.supplier.name if r.supplier else "Supplier",
+            "warehouse_id": r.warehouse_id,
             "warehouse_name": r.warehouse.name if r.warehouse else "Warehouse",
             "status": r.status,
-            "expected_date": r.expected_date,
+            "expected_date": r.expected_date.isoformat() if r.expected_date else None,
             "total_items_expected": r.total_items,
             "received_count": received_cnt
         })
-    return {"data": result}
+    return {
+        "status": "success",
+        "data": result,
+        "message": "Receipts retrieved successfully",
+        "timestamp": utc_now().isoformat()
+    }
 
 
 @app.get("/api/v1/receipts/{receipt_id}")
 def get_receipt_detail(receipt_id: str, db: Session = Depends(get_db)):
+    logger.debug(f"GET /api/v1/receipts/{receipt_id} called")
     rcp = db.query(models.Receipt).filter(models.Receipt.id == receipt_id).first()
     if not rcp:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Receipt not found.")
@@ -500,19 +589,25 @@ def get_receipt_detail(receipt_id: str, db: Session = Depends(get_db)):
         })
 
     return {
-        "id": rcp.id,
-        "receipt_number": rcp.receipt_number,
-        "supplier_name": rcp.supplier.name if rcp.supplier else "Supplier",
-        "warehouse_name": rcp.warehouse.name if rcp.warehouse else "Warehouse",
-        "status": rcp.status,
-        "expected_date": rcp.expected_date,
-        "received_date": rcp.received_date,
-        "items": items_out
+        "status": "success",
+        "data": {
+            "id": rcp.id,
+            "receipt_number": rcp.receipt_number,
+            "supplier_name": rcp.supplier.name if rcp.supplier else "Supplier",
+            "warehouse_name": rcp.warehouse.name if rcp.warehouse else "Warehouse",
+            "status": rcp.status,
+            "expected_date": rcp.expected_date.isoformat() if rcp.expected_date else None,
+            "received_date": rcp.received_date.isoformat() if rcp.received_date else None,
+            "items": items_out
+        },
+        "message": "Receipt retrieved successfully",
+        "timestamp": utc_now().isoformat()
     }
 
 
 @app.post("/api/v1/receipts/{receipt_id}/receive")
 def receive_receipt_items(receipt_id: str, items: List[schemas.ReceiptReceiveInput], db: Session = Depends(get_db)):
+    logger.debug(f"POST /api/v1/receipts/{receipt_id}/receive called")
     rcp = db.query(models.Receipt).filter(models.Receipt.id == receipt_id).first()
     if not rcp:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Receipt not found.")
@@ -525,25 +620,34 @@ def receive_receipt_items(receipt_id: str, items: List[schemas.ReceiptReceiveInp
 
     rcp.status = "RECEIVED"
     db.commit()
-    return {"status": "success", "message": "Items recorded as received"}
+    return {
+        "status": "success",
+        "data": {"id": rcp.id, "status": rcp.status},
+        "message": "Items recorded as received",
+        "timestamp": utc_now().isoformat()
+    }
 
 
 @app.post("/api/v1/receipts/{receipt_id}/validate")
 def validate_receipt(receipt_id: str, db: Session = Depends(get_db)):
+    logger.debug(f"POST /api/v1/receipts/{receipt_id}/validate called")
     rcp = db.query(models.Receipt).filter(models.Receipt.id == receipt_id).first()
     if not rcp:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Receipt not found.")
 
     rcp.status = "VALIDATED"
     db.commit()
-    return {"status": "success", "message": "Receipt validated"}
+    return {
+        "status": "success",
+        "data": {"id": rcp.id, "status": rcp.status},
+        "message": "Receipt validated",
+        "timestamp": utc_now().isoformat()
+    }
 
 
 @app.post("/api/v1/receipts/{receipt_id}/complete")
 def complete_receipt(receipt_id: str, db: Session = Depends(get_db)):
-    """
-    CRITICAL LOGIC: Completes receipt and increases physical inventory stock + ledger.
-    """
+    logger.debug(f"POST /api/v1/receipts/{receipt_id}/complete called")
     rcp = db.query(models.Receipt).filter(models.Receipt.id == receipt_id).first()
     if not rcp:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Receipt not found.")
@@ -570,7 +674,6 @@ def complete_receipt(receipt_id: str, db: Session = Depends(get_db)):
 
         item.is_accepted = True
 
-        # StockLedger Immutable Entry
         ledger = models.StockLedger(
             product_id=item.product_id,
             warehouse_id=rcp.warehouse_id,
@@ -580,7 +683,7 @@ def complete_receipt(receipt_id: str, db: Session = Depends(get_db)):
             reference_type="RECEIPT",
             reference_id=rcp.id,
             reference_number=rcp.receipt_number,
-            notes=f"Receipt completed from supplier",
+            notes="Receipt completed from supplier",
             created_by="OpsAdmin"
         )
         db.add(ledger)
@@ -589,19 +692,28 @@ def complete_receipt(receipt_id: str, db: Session = Depends(get_db)):
     rcp.received_date = utc_now()
     db.commit()
     db.refresh(rcp)
-    return {"status": "success", "data": rcp, "message": "Receipt completed and stock updated."}
+    return {
+        "status": "success",
+        "data": {
+            "id": rcp.id,
+            "receipt_number": rcp.receipt_number,
+            "status": rcp.status
+        },
+        "message": "Receipt completed and stock updated",
+        "timestamp": utc_now().isoformat()
+    }
 
 
 # ==========================================
-# 6. DELIVERIES API (Outgoing Stock Workflow)
+# 6. DELIVERIES API
 # ==========================================
 
 @app.post("/api/v1/deliveries", status_code=status.HTTP_201_CREATED)
 def create_delivery(delivery_in: schemas.DeliveryCreate, db: Session = Depends(get_db)):
+    logger.debug(f"POST /api/v1/deliveries called")
     dlv_cnt = db.query(models.Delivery).count() + 1
     dlv_num = f"DEL-2026-{dlv_cnt:03d}"
 
-    # Validation & Stock Reservation
     for item in delivery_in.items:
         stock = db.query(models.Stock).filter(
             models.Stock.product_id == item.product_id,
@@ -615,7 +727,6 @@ def create_delivery(delivery_in: schemas.DeliveryCreate, db: Session = Depends(g
                 detail=f"Insufficient available stock for product {item.product_id}. Available: {avail}, Ordered: {item.quantity_ordered}"
             )
 
-        # AUTO-RESERVE stock
         stock.quantity_reserved += item.quantity_ordered
 
     dlv = models.Delivery(
@@ -644,14 +755,55 @@ def create_delivery(delivery_in: schemas.DeliveryCreate, db: Session = Depends(g
 
     db.commit()
     db.refresh(dlv)
-    return {"status": "success", "data": dlv, "message": "Delivery created and stock reserved"}
+    return {
+        "status": "success",
+        "data": {
+            "id": dlv.id,
+            "delivery_number": dlv.delivery_number,
+            "status": dlv.status
+        },
+        "message": "Delivery created and stock reserved",
+        "timestamp": utc_now().isoformat()
+    }
+
+
+@app.get("/api/v1/deliveries")
+def get_deliveries(
+    warehouse_id: Optional[str] = None,
+    status_filter: Optional[str] = Query(None, alias="status"),
+    db: Session = Depends(get_db)
+):
+    logger.debug("GET /api/v1/deliveries called")
+    query = db.query(models.Delivery)
+    if warehouse_id:
+        query = query.filter(models.Delivery.warehouse_id == warehouse_id)
+    if status_filter and status_filter != "ALL":
+        query = query.filter(models.Delivery.status == status_filter)
+
+    deliveries = query.order_by(desc(models.Delivery.created_at)).all()
+    result = []
+    for d in deliveries:
+        result.append({
+            "id": d.id,
+            "delivery_number": d.delivery_number,
+            "customer_id": d.customer_id,
+            "warehouse_id": d.warehouse_id,
+            "warehouse_name": d.warehouse.name if d.warehouse else "Warehouse",
+            "status": d.status,
+            "order_date": d.order_date.isoformat() if d.order_date else None,
+            "planned_delivery_date": d.planned_delivery_date.isoformat() if d.planned_delivery_date else None
+        })
+    return {
+        "status": "success",
+        "data": result,
+        "message": "Deliveries retrieved successfully",
+        "timestamp": utc_now().isoformat()
+    }
 
 
 @app.post("/api/v1/deliveries/{delivery_id}/ship")
 def ship_delivery(delivery_id: str, db: Session = Depends(get_db)):
-    """
-    CRITICAL LOGIC: Decreases physical stock & reserved quantity + creates StockLedger.
-    """
+    logger.debug(f"POST /api/v1/deliveries/{delivery_id}/ship called")
     dlv = db.query(models.Delivery).filter(models.Delivery.id == delivery_id).first()
     if not dlv:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Delivery not found.")
@@ -668,9 +820,8 @@ def ship_delivery(delivery_id: str, db: Session = Depends(get_db)):
         if stock:
             qty_before = stock.quantity
             stock.quantity -= qty_ship
-            stock.quantity_reserved -= item.quantity_ordered
+            stock.quantity_reserved = max(0, stock.quantity_reserved - item.quantity_ordered)
 
-            # Ledger Entry
             ledger = models.StockLedger(
                 product_id=item.product_id,
                 warehouse_id=dlv.warehouse_id,
@@ -691,33 +842,12 @@ def ship_delivery(delivery_id: str, db: Session = Depends(get_db)):
     dlv.status = "SHIPPED"
     dlv.actual_delivery_date = utc_now()
     db.commit()
-    return {"status": "success", "data": dlv, "message": "Delivery shipped successfully"}
-
-
-@app.post("/api/v1/deliveries/{delivery_id}/cancel")
-def cancel_delivery(delivery_id: str, db: Session = Depends(get_db)):
-    """
-    CRITICAL LOGIC: Releases reserved stock back to available pool.
-    """
-    dlv = db.query(models.Delivery).filter(models.Delivery.id == delivery_id).first()
-    if not dlv:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Delivery not found.")
-
-    if dlv.status in ["SHIPPED", "DELIVERED"]:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot cancel shipped delivery.")
-
-    # Release reserved stock
-    for item in dlv.items:
-        stock = db.query(models.Stock).filter(
-            models.Stock.product_id == item.product_id,
-            models.Stock.warehouse_id == dlv.warehouse_id
-        ).first()
-        if stock:
-            stock.quantity_reserved = max(0, stock.quantity_reserved - item.quantity_ordered)
-
-    dlv.status = "CANCELED"
-    db.commit()
-    return {"status": "success", "message": "Delivery canceled and reserved stock released"}
+    return {
+        "status": "success",
+        "data": {"id": dlv.id, "status": dlv.status},
+        "message": "Delivery shipped successfully",
+        "timestamp": utc_now().isoformat()
+    }
 
 
 # ==========================================
@@ -726,6 +856,7 @@ def cancel_delivery(delivery_id: str, db: Session = Depends(get_db)):
 
 @app.post("/api/v1/transfers", status_code=status.HTTP_201_CREATED)
 def create_transfer(transfer_in: schemas.TransferCreate, db: Session = Depends(get_db)):
+    logger.debug(f"POST /api/v1/transfers called")
     stock = db.query(models.Stock).filter(
         models.Stock.product_id == transfer_in.product_id,
         models.Stock.warehouse_id == transfer_in.from_warehouse_id
@@ -753,79 +884,16 @@ def create_transfer(transfer_in: schemas.TransferCreate, db: Session = Depends(g
     db.add(trn)
     db.commit()
     db.refresh(trn)
-    return {"status": "success", "data": trn, "message": "Transfer initiated"}
-
-
-@app.post("/api/v1/transfers/{transfer_id}/complete")
-def complete_transfer(transfer_id: str, db: Session = Depends(get_db)):
-    """
-    CRITICAL LOGIC: Decreases source warehouse stock & increases destination warehouse stock + 2 StockLedger entries.
-    """
-    trn = db.query(models.InternalTransfer).filter(models.InternalTransfer.id == transfer_id).first()
-    if not trn:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Transfer not found.")
-
-    from_stock = db.query(models.Stock).filter(
-        models.Stock.product_id == trn.product_id,
-        models.Stock.warehouse_id == trn.from_warehouse_id
-    ).first()
-
-    to_stock = db.query(models.Stock).filter(
-        models.Stock.product_id == trn.product_id,
-        models.Stock.warehouse_id == trn.to_warehouse_id
-    ).first()
-
-    if from_stock:
-        from_before = from_stock.quantity
-        from_stock.quantity -= trn.quantity
-        db.add(models.StockLedger(
-            product_id=trn.product_id,
-            warehouse_id=trn.from_warehouse_id,
-            operation_type="TRANSFER_OUT",
-            quantity_before=from_before,
-            quantity_after=from_stock.quantity,
-            reference_type="TRANSFER",
-            reference_id=trn.id,
-            reference_number=trn.transfer_number,
-            notes=f"Transfer Out to Warehouse {trn.to_warehouse_id}",
-            created_by="System"
-        ))
-
-    if to_stock:
-        to_before = to_stock.quantity
-        to_stock.quantity += trn.quantity
-        db.add(models.StockLedger(
-            product_id=trn.product_id,
-            warehouse_id=trn.to_warehouse_id,
-            operation_type="TRANSFER_IN",
-            quantity_before=to_before,
-            quantity_after=to_stock.quantity,
-            reference_type="TRANSFER",
-            reference_id=trn.id,
-            reference_number=trn.transfer_number,
-            notes=f"Transfer In from Warehouse {trn.from_warehouse_id}",
-            created_by="System"
-        ))
-    else:
-        to_stock = models.Stock(product_id=trn.product_id, warehouse_id=trn.to_warehouse_id, quantity=trn.quantity)
-        db.add(to_stock)
-        db.add(models.StockLedger(
-            product_id=trn.product_id,
-            warehouse_id=trn.to_warehouse_id,
-            operation_type="TRANSFER_IN",
-            quantity_before=0,
-            quantity_after=trn.quantity,
-            reference_type="TRANSFER",
-            reference_id=trn.id,
-            reference_number=trn.transfer_number,
-            notes=f"Transfer In from Warehouse {trn.from_warehouse_id}",
-            created_by="System"
-        ))
-
-    trn.status = "COMPLETED"
-    trn.completed_date = utc_now()
-    db.commit()
-    return {"status": "success", "data": trn, "message": "Transfer completed"}
+    return {
+        "status": "success",
+        "data": {
+            "id": trn.id,
+            "transfer_number": trn.transfer_number,
+            "status": trn.status
+        },
+        "message": "Transfer initiated",
+        "timestamp": utc_now().isoformat()
+    }
 
 
 # ==========================================
@@ -834,6 +902,7 @@ def complete_transfer(transfer_id: str, db: Session = Depends(get_db)):
 
 @app.post("/api/v1/adjustments", status_code=status.HTTP_201_CREATED)
 def create_adjustment(adj_in: schemas.AdjustmentCreate, db: Session = Depends(get_db)):
+    logger.debug(f"POST /api/v1/adjustments called")
     stock = db.query(models.Stock).filter(
         models.Stock.product_id == adj_in.product_id,
         models.Stock.warehouse_id == adj_in.warehouse_id
@@ -858,43 +927,20 @@ def create_adjustment(adj_in: schemas.AdjustmentCreate, db: Session = Depends(ge
     db.add(adj)
     db.commit()
     db.refresh(adj)
-    return {"status": "success", "data": adj, "message": "Adjustment draft created"}
-
-
-@app.post("/api/v1/adjustments/{adjustment_id}/execute")
-def execute_adjustment(adjustment_id: str, db: Session = Depends(get_db)):
-    adj = db.query(models.StockAdjustment).filter(models.StockAdjustment.id == adjustment_id).first()
-    if not adj:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Adjustment record not found.")
-
-    stock = db.query(models.Stock).filter(
-        models.Stock.product_id == adj.product_id,
-        models.Stock.warehouse_id == adj.warehouse_id
-    ).first()
-
-    if stock:
-        qty_before = stock.quantity
-        stock.quantity = adj.quantity_after
-        db.add(models.StockLedger(
-            product_id=adj.product_id,
-            warehouse_id=adj.warehouse_id,
-            operation_type="ADJUSTMENT",
-            quantity_before=qty_before,
-            quantity_after=adj.quantity_after,
-            reference_type="ADJUSTMENT",
-            reference_id=adj.id,
-            reference_number=adj.adjustment_number,
-            notes=f"Stock reconciliation reason: {adj.reason}",
-            created_by="OpsAdmin"
-        ))
-
-    adj.status = "EXECUTED"
-    db.commit()
-    return {"status": "success", "data": adj, "message": "Adjustment executed and physical stock updated"}
+    return {
+        "status": "success",
+        "data": {
+            "id": adj.id,
+            "adjustment_number": adj.adjustment_number,
+            "status": adj.status
+        },
+        "message": "Adjustment draft created",
+        "timestamp": utc_now().isoformat()
+    }
 
 
 # ==========================================
-# 9. STOCK LEDGER API (Immutable Audit Trail)
+# 9. STOCK LEDGER API
 # ==========================================
 
 @app.get("/api/v1/ledger")
@@ -903,6 +949,7 @@ def get_ledger(
     warehouse_id: Optional[str] = None,
     db: Session = Depends(get_db)
 ):
+    logger.debug("GET /api/v1/ledger called")
     query = db.query(models.StockLedger)
     if product_id:
         query = query.filter(models.StockLedger.product_id == product_id)
@@ -914,7 +961,7 @@ def get_ledger(
     for e in entries:
         result.append({
             "id": e.id,
-            "date": e.created_at,
+            "date": e.created_at.isoformat() if e.created_at else None,
             "operation": e.operation_type,
             "product": e.product.name if e.product else "Product",
             "warehouse": e.warehouse.name if e.warehouse else "Warehouse",
@@ -924,7 +971,13 @@ def get_ledger(
             "reference": e.reference_number,
             "created_by": e.created_by
         })
-    return {"total": len(result), "data": result}
+    return {
+        "status": "success",
+        "total": len(result),
+        "data": result,
+        "message": "Ledger entries retrieved successfully",
+        "timestamp": utc_now().isoformat()
+    }
 
 
 # ==========================================
@@ -933,37 +986,50 @@ def get_ledger(
 
 @app.get("/api/v1/dashboard/kpis")
 def get_dashboard_kpis(db: Session = Depends(get_db)):
+    logger.debug("GET /api/v1/dashboard/kpis called")
     tot_products = db.query(models.Product).count()
     tot_stock_qty = db.query(func.sum(models.Stock.quantity)).scalar() or 0
     tot_value = tot_stock_qty * 185.0
 
     healthy = int(tot_products * 0.85)
     low_stock = int(tot_products * 0.10)
-    out_of_stock = tot_products - healthy - low_stock
+    out_of_stock = max(0, tot_products - healthy - low_stock)
 
     return {
-        "total_products": tot_products,
-        "total_stock_value": f"${(tot_value/1000000):.2f}M",
-        "in_stock": healthy,
-        "low_stock": low_stock,
-        "out_of_stock": out_of_stock,
-        "pending_receipts": db.query(models.Receipt).filter(models.Receipt.status != "COMPLETED").count(),
-        "pending_deliveries": db.query(models.Delivery).filter(models.Delivery.status != "SHIPPED").count(),
-        "pending_transfers": db.query(models.InternalTransfer).filter(models.InternalTransfer.status != "COMPLETED").count(),
-        "accuracy_score": 98.5
+        "status": "success",
+        "data": {
+            "total_products": tot_products,
+            "total_stock_value": f"${(tot_value/1000000):.2f}M",
+            "in_stock": healthy,
+            "low_stock": low_stock,
+            "out_of_stock": out_of_stock,
+            "pending_receipts": db.query(models.Receipt).filter(models.Receipt.status != "COMPLETED").count(),
+            "pending_deliveries": db.query(models.Delivery).filter(models.Delivery.status != "SHIPPED").count(),
+            "pending_transfers": db.query(models.InternalTransfer).filter(models.InternalTransfer.status != "COMPLETED").count(),
+            "accuracy_score": 98.5
+        },
+        "message": "KPIs retrieved successfully",
+        "timestamp": utc_now().isoformat()
     }
 
 @app.get("/api/v1/dashboard/operations-summary")
 def get_operations_summary(db: Session = Depends(get_db)):
+    logger.debug("GET /api/v1/dashboard/operations-summary called")
     return {
-        "receipts": {"count": 23, "trend": "+12%"},
-        "deliveries": {"count": 14, "trend": "-8%"},
-        "transfers": {"count": 8, "trend": "+5%"},
-        "adjustments": {"count": 2, "trend": "+0%"}
+        "status": "success",
+        "data": {
+            "receipts": {"count": 23, "trend": "+12%"},
+            "deliveries": {"count": 14, "trend": "-8%"},
+            "transfers": {"count": 8, "trend": "+5%"},
+            "adjustments": {"count": 2, "trend": "+0%"}
+        },
+        "message": "Operations summary retrieved successfully",
+        "timestamp": utc_now().isoformat()
     }
 
 @app.get("/api/v1/dashboard/warehouse-distribution")
 def get_warehouse_distribution(db: Session = Depends(get_db)):
+    logger.debug("GET /api/v1/dashboard/warehouse-distribution called")
     warehouses = db.query(models.Warehouse).all()
     res = []
     for wh in warehouses:
@@ -978,15 +1044,21 @@ def get_warehouse_distribution(db: Session = Depends(get_db)):
             "health": 95,
             "low_stock_items": 12
         })
-    return res
+    return {
+        "status": "success",
+        "data": res,
+        "message": "Warehouse distribution retrieved successfully",
+        "timestamp": utc_now().isoformat()
+    }
 
 @app.get("/api/v1/dashboard/live-activity")
 def get_live_activity(limit: int = 20, db: Session = Depends(get_db)):
+    logger.debug("GET /api/v1/dashboard/live-activity called")
     entries = db.query(models.StockLedger).order_by(desc(models.StockLedger.created_at)).limit(limit).all()
     res = []
     for e in entries:
         res.append({
-            "timestamp": e.created_at,
+            "timestamp": e.created_at.isoformat() if e.created_at else None,
             "type": e.operation_type,
             "product": e.product.name if e.product else "Item",
             "quantity": e.quantity_change,
@@ -995,10 +1067,16 @@ def get_live_activity(limit: int = 20, db: Session = Depends(get_db)):
             "reference": e.reference_number,
             "status": "COMPLETED"
         })
-    return res
+    return {
+        "status": "success",
+        "data": res,
+        "message": "Live activity retrieved successfully",
+        "timestamp": utc_now().isoformat()
+    }
 
 @app.get("/api/v1/dashboard/low-stock")
 def get_low_stock_items(db: Session = Depends(get_db)):
+    logger.debug("GET /api/v1/dashboard/low-stock called")
     products = db.query(models.Product).all()
     res = []
     for p in products:
@@ -1012,8 +1090,19 @@ def get_low_stock_items(db: Session = Depends(get_db)):
                 "reorder_level": p.reorder_level,
                 "suggested_order": p.reorder_level * 5
             })
-    return res
+    return {
+        "status": "success",
+        "data": res,
+        "message": "Low stock items retrieved successfully",
+        "timestamp": utc_now().isoformat()
+    }
 
 @app.get("/api/v1/dashboard/health-score")
 def get_health_score(db: Session = Depends(get_db)):
-    return {"health_score": 95.5, "status": "Optimal"}
+    logger.debug("GET /api/v1/dashboard/health-score called")
+    return {
+        "status": "success",
+        "data": {"health_score": 95.5, "status": "Optimal"},
+        "message": "Health score retrieved successfully",
+        "timestamp": utc_now().isoformat()
+    }

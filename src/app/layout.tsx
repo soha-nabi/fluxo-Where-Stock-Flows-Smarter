@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
+import { ToastProvider } from "@/components/common/ToastProvider";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -13,7 +14,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Fluxo — Operations Command Center",
+  title: "FLUXO — Operations Command Center",
   description: "Production-ready inventory management SaaS platform. Where Stock Flows Smarter.",
   keywords: ["Inventory", "SaaS", "Logistics", "Supply Chain", "Warehouse Operations"],
 };
@@ -25,8 +26,8 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en" className={`${geistSans.variable} ${geistMono.variable} dark antialiased h-full`}>
-      <body className="min-h-full bg-[#09090b] text-[#f4f4f5] font-sans flex flex-col selection:bg-[#7c3aed] selection:text-white">
-        {children}
+      <body className="min-h-full bg-[#090a10] text-[#f4f4f5] font-sans flex flex-col selection:bg-[#7c3aed] selection:text-white">
+        <ToastProvider>{children}</ToastProvider>
       </body>
     </html>
   );

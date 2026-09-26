@@ -9,7 +9,7 @@ interface ReceiptsTableProps {
   receipts: Receipt[];
 }
 
-export function ReceiptsTable({ receipts }: ReceiptsTableProps) {
+function ReceiptsTableComponent({ receipts }: ReceiptsTableProps) {
   const getBadge = (status: string) => {
     switch (status) {
       case "COMPLETED":
@@ -58,3 +58,6 @@ export function ReceiptsTable({ receipts }: ReceiptsTableProps) {
     </div>
   );
 }
+
+export const ReceiptsTable = React.memo(ReceiptsTableComponent);
+

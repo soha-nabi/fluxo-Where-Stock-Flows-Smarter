@@ -11,7 +11,7 @@ interface ProductsTableProps {
   expandedId?: string | null;
 }
 
-export function ProductsTable({ products, onExpandWarehouse, expandedId }: ProductsTableProps) {
+function ProductsTableComponent({ products, onExpandWarehouse, expandedId }: ProductsTableProps) {
   return (
     <div className="bg-[#121422] border border-[#212438] rounded-2xl overflow-hidden shadow-xl">
       <div className="overflow-x-auto">
@@ -121,3 +121,6 @@ export function ProductsTable({ products, onExpandWarehouse, expandedId }: Produ
     </div>
   );
 }
+
+export const ProductsTable = React.memo(ProductsTableComponent);
+

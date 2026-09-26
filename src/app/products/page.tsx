@@ -21,11 +21,16 @@ import {
   Eye,
 } from "lucide-react";
 
+import { useDebounce } from "@/hooks/useDebounce";
+import { useLocalStorageCache } from "@/hooks/useLocalStorageCache";
+
 export default function ProductsPage() {
   const { products, loading, error, fetchProducts, createProduct, clearError } = useProductStore();
 
   const [searchTerm, setSearchTerm] = useState("");
-  const [selectedCategory, setSelectedCategory] = useState<string>("ALL");
+  const debouncedSearchTerm = useDebounce(searchTerm, 300);
+
+  const [selectedCategory, setSelectedCategory] = useLocalStorageCache<string>("product_category_filter", "ALL");
   const [sortBy, setSortBy] = useState<"name" | "sku" | "stock">("name");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
   const [expandedProductId, setExpandedProductId] = useState<string | null>(null);
@@ -44,30 +49,39 @@ export default function ProductsPage() {
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
-    fetchProducts();
-  }, [fetchProducts]);
+    const controller = new AbortController();
+    fetchProducts({ search: debouncedSearchTerm, category: selectedCategory === "ALL" ? undefined : selectedCategory });
+    return () => {
+      controller.abort();
+    };
+  }, [fetchProducts, debouncedSearchTerm, selectedCategory]);
 
-  // Filter & Search Logic
-  const filteredProducts = products.filter((p) => {
-    const matchesSearch =
-      p.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      p.sku.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesCategory = selectedCategory === "ALL" || p.category === selectedCategory;
-    return matchesSearch && matchesCategory;
-  });
+  // Memoized Filter & Search Logic
+  const filteredProducts = React.useMemo(() => {
+    return products.filter((p) => {
+      const matchesSearch =
+        p.name.toLowerCase().includes(debouncedSearchTerm.toLowerCase()) ||
+        p.sku.toLowerCase().includes(debouncedSearchTerm.toLowerCase());
+      const matchesCategory = selectedCategory === "ALL" || p.category === selectedCategory;
+      return matchesSearch && matchesCategory;
+    });
+  }, [products, debouncedSearchTerm, selectedCategory]);
 
-  // Sorting Logic
-  const sortedProducts = [...filteredProducts].sort((a, b) => {
-    if (sortBy === "name") {
-      return sortOrder === "asc" ? a.name.localeCompare(b.name) : b.name.localeCompare(a.name);
-    } else if (sortBy === "sku") {
-      return sortOrder === "asc" ? a.sku.localeCompare(b.sku) : b.sku.localeCompare(a.sku);
-    } else {
-      const stockA = a.total_stock || 0;
-      const stockB = b.total_stock || 0;
-      return sortOrder === "asc" ? stockA - stockB : stockB - stockA;
-    }
-  });
+  // Memoized Sorting Logic
+  const sortedProducts = React.useMemo(() => {
+    return [...filteredProducts].sort((a, b) => {
+      if (sortBy === "name") {
+        return sortOrder === "asc" ? a.name.localeCompare(b.name) : b.name.localeCompare(a.name);
+      } else if (sortBy === "sku") {
+        return sortOrder === "asc" ? a.sku.localeCompare(b.sku) : b.sku.localeCompare(a.sku);
+      } else {
+        const stockA = a.total_stock || 0;
+        const stockB = b.total_stock || 0;
+        return sortOrder === "asc" ? stockA - stockB : stockB - stockA;
+      }
+    });
+  }, [filteredProducts, sortBy, sortOrder]);
+
 
   const handleCreateSubmit = async (e: React.FormEvent) => {
     e.preventDefault();

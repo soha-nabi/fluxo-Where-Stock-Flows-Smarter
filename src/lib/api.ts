@@ -462,29 +462,53 @@ export interface DashboardMetrics {
 // 5. SERVICE METHODS
 // ==========================================
 
+import { queryCache, withQueryCache } from "./cache";
+
 // --- PRODUCTS ---
 export const productsApi = {
-  getProducts: (params?: { search?: string; category?: string; page?: number; limit?: number; sort_by?: string }): Promise<ProductsResponse> =>
-    extractData<ProductsResponse>(apiClient.get("/api/v1/products", { params })),
+  getProducts: (
+    params?: { search?: string; category?: string; page?: number; limit?: number; sort_by?: string },
+    signal?: AbortSignal
+  ): Promise<ProductsResponse> => {
+    const cacheKey = `products_${JSON.stringify(params || {})}`;
+    return withQueryCache(
+      cacheKey,
+      () => extractData<ProductsResponse>(apiClient.get("/api/v1/products", { params, signal })),
+      600000 // 10 minutes TTL
+    );
+  },
 
-  getProduct: (id: string): Promise<Product> =>
-    extractData<Product>(apiClient.get(`/api/v1/products/${id}`)),
+  getProduct: (id: string, signal?: AbortSignal): Promise<Product> =>
+    withQueryCache(
+      `product_${id}`,
+      () => extractData<Product>(apiClient.get(`/api/v1/products/${id}`, { signal })),
+      600000
+    ),
 
-  createProduct: (data: ProductInput): Promise<Product> =>
-    extractData<Product>(apiClient.post("/api/v1/products", data)),
+  createProduct: (data: ProductInput): Promise<Product> => {
+    queryCache.invalidate("products_");
+    return extractData<Product>(apiClient.post("/api/v1/products", data));
+  },
 
-  updateProduct: (id: string, data: ProductInput | Partial<ProductInput>): Promise<Product> =>
-    extractData<Product>(apiClient.patch(`/api/v1/products/${id}`, data)),
+  updateProduct: (id: string, data: ProductInput | Partial<ProductInput>): Promise<Product> => {
+    queryCache.invalidate("products_");
+    queryCache.invalidate(`product_${id}`);
+    return extractData<Product>(apiClient.patch(`/api/v1/products/${id}`, data));
+  },
 
-  deleteProduct: (id: string): Promise<void> =>
-    apiClient.delete(`/api/v1/products/${id}`).then(() => undefined),
+  deleteProduct: (id: string): Promise<void> => {
+    queryCache.invalidate("products_");
+    queryCache.invalidate(`product_${id}`);
+    return apiClient.delete(`/api/v1/products/${id}`).then(() => undefined);
+  },
 
-  getProductStock: (productId: string): Promise<StockData[]> =>
-    apiClient.get(`/api/v1/products/${productId}`).then((res) => {
+  getProductStock: (productId: string, signal?: AbortSignal): Promise<StockData[]> =>
+    apiClient.get(`/api/v1/products/${productId}`, { signal }).then((res) => {
       const payload = res.data?.data || res.data;
       return payload?.locations || payload?.warehouses || [];
     }),
 };
+
 
 // --- WAREHOUSES ---
 export const warehousesApi = {
@@ -611,24 +635,45 @@ export const ledgerApi = {
 
 // --- DASHBOARD ---
 export const dashboardApi = {
-  getKPIs: (params?: { warehouse_id?: string; date_range?: string }): Promise<KPIs> =>
-    extractData<KPIs>(apiClient.get("/api/v1/dashboard/kpis", { params })),
+  getKPIs: (params?: { warehouse_id?: string; date_range?: string }, signal?: AbortSignal): Promise<KPIs> =>
+    withQueryCache(
+      `kpis_${JSON.stringify(params || {})}`,
+      () => extractData<KPIs>(apiClient.get("/api/v1/dashboard/kpis", { params, signal })),
+      300000 // 5 minutes TTL
+    ),
 
-  getOperationsSummary: (params?: { date_range?: string }): Promise<OperationsSummary> =>
-    extractData<OperationsSummary>(apiClient.get("/api/v1/dashboard/operations-summary", { params })),
+  getOperationsSummary: (params?: { date_range?: string }, signal?: AbortSignal): Promise<OperationsSummary> =>
+    withQueryCache(
+      `op_summary_${JSON.stringify(params || {})}`,
+      () => extractData<OperationsSummary>(apiClient.get("/api/v1/dashboard/operations-summary", { params, signal })),
+      300000
+    ),
 
-  getWarehouseDistribution: (): Promise<WarehouseMetrics[]> =>
-    extractData<WarehouseMetrics[]>(apiClient.get("/api/v1/dashboard/warehouse-distribution")),
+  getWarehouseDistribution: (signal?: AbortSignal): Promise<WarehouseMetrics[]> =>
+    withQueryCache(
+      "warehouse_dist",
+      () => extractData<WarehouseMetrics[]>(apiClient.get("/api/v1/dashboard/warehouse-distribution", { signal })),
+      300000
+    ),
 
-  getLiveActivity: (limit: number = 20): Promise<ActivityEntry[]> =>
-    extractData<ActivityEntry[]>(apiClient.get("/api/v1/dashboard/live-activity", { params: { limit } })),
+  getLiveActivity: (limit: number = 20, signal?: AbortSignal): Promise<ActivityEntry[]> =>
+    extractData<ActivityEntry[]>(apiClient.get("/api/v1/dashboard/live-activity", { params: { limit }, signal })),
 
-  getLowStockItems: (): Promise<LowStockItem[]> =>
-    extractData<LowStockItem[]>(apiClient.get("/api/v1/dashboard/low-stock")),
+  getLowStockItems: (signal?: AbortSignal): Promise<LowStockItem[]> =>
+    withQueryCache(
+      "low_stock_items",
+      () => extractData<LowStockItem[]>(apiClient.get("/api/v1/dashboard/low-stock", { signal })),
+      300000
+    ),
 
-  getHealthScore: (): Promise<HealthScore> =>
-    extractData<HealthScore>(apiClient.get("/api/v1/dashboard/health-score")),
+  getHealthScore: (signal?: AbortSignal): Promise<HealthScore> =>
+    withQueryCache(
+      "health_score",
+      () => extractData<HealthScore>(apiClient.get("/api/v1/dashboard/health-score", { signal })),
+      300000
+    ),
 };
+
 
 // Backward-compatibility wrapper for Dashboard Page
 export async function fetchDashboardMetrics(): Promise<DashboardMetrics> {

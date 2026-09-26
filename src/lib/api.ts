@@ -201,6 +201,36 @@ export interface WarehouseInput {
   capacity: number;
 }
 
+// --- LOCATIONS ---
+export interface LocationItem {
+  id: string;
+  warehouse_id: string;
+  name: string;
+  code: string;
+  location_type: string;
+  capacity: number;
+  current_stock_count: number;
+  current_stock_value?: string;
+  is_active: boolean;
+  created_at?: string;
+}
+
+export interface LocationDetail extends LocationItem {
+  warehouse?: {
+    id: string;
+    name: string;
+    code: string;
+  };
+  stock_items?: Array<{ product: string; quantity: number }>;
+}
+
+export interface LocationInput {
+  name: string;
+  code: string;
+  location_type: "RACK" | "SHELF" | "BIN" | "FLOOR" | "FREEZER" | string;
+  capacity: number;
+}
+
 // --- SUPPLIERS ---
 export interface Supplier {
   id: string;
@@ -534,6 +564,27 @@ export const warehousesApi = {
 
   updateWarehouse: (id: string, data: WarehouseInput | Partial<WarehouseInput>): Promise<Warehouse> =>
     extractData<Warehouse>(apiClient.patch(`/api/v1/warehouses/${id}`, data)),
+};
+
+// --- LOCATIONS ---
+export const locationsApi = {
+  getLocations: (warehouseId: string, page: number = 1, limit: number = 20): Promise<LocationItem[]> =>
+    extractData<LocationItem[]>(apiClient.get(`/api/v1/warehouses/${warehouseId}/locations`, { params: { page, limit } })),
+
+  getLocation: (id: string): Promise<LocationDetail> =>
+    extractData<LocationDetail>(apiClient.get(`/api/v1/locations/${id}`)),
+
+  createLocation: (warehouseId: string, data: LocationInput): Promise<LocationItem> =>
+    extractData<LocationItem>(apiClient.post(`/api/v1/warehouses/${warehouseId}/locations`, data)),
+
+  updateLocation: (id: string, data: Partial<LocationInput> & { is_active?: boolean }): Promise<LocationItem> =>
+    extractData<LocationItem>(apiClient.patch(`/api/v1/locations/${id}`, data)),
+
+  deleteLocation: (id: string): Promise<void> =>
+    apiClient.delete(`/api/v1/locations/${id}`).then(() => undefined),
+
+  getLocationStock: (locationId: string): Promise<Array<{ product_id: string; product_name: string; sku: string; quantity: number; unit: string; value: string }>> =>
+    extractData(apiClient.get(`/api/v1/locations/${locationId}/stock`)),
 };
 
 // --- SUPPLIERS ---

@@ -391,10 +391,25 @@ def update_warehouse(warehouse_id: str, update_in: schemas.WarehouseUpdate, db: 
 # 3. LOCATIONS API
 # ==========================================
 
+VALID_LOCATION_TYPES = {"RACK", "SHELF", "BIN", "FLOOR", "FREEZER"}
+
 @app.get("/api/v1/warehouses/{warehouse_id}/locations")
-def get_locations(warehouse_id: str, db: Session = Depends(get_db)):
-    logger.debug(f"GET /api/v1/warehouses/{warehouse_id}/locations called")
-    locs = db.query(models.Location).filter(models.Location.warehouse_id == warehouse_id).all()
+def get_locations(
+    warehouse_id: str,
+    page: int = Query(1, ge=1),
+    limit: int = Query(20, ge=1, le=100),
+    db: Session = Depends(get_db)
+):
+    logger.debug(f"GET /api/v1/warehouses/{warehouse_id}/locations called with page={page}, limit={limit}")
+    wh = db.query(models.Warehouse).filter(models.Warehouse.id == warehouse_id).first()
+    if not wh:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Warehouse not found.")
+
+    query = db.query(models.Location).filter(models.Location.warehouse_id == warehouse_id)
+    total = query.count()
+    skip = (page - 1) * limit
+    locs = query.order_by(models.Location.created_at.desc()).offset(skip).limit(limit).all()
+
     result = []
     for l in locs:
         qty = db.query(func.sum(models.Stock.quantity)).filter(models.Stock.location_id == l.id).scalar() or 0
@@ -405,15 +420,223 @@ def get_locations(warehouse_id: str, db: Session = Depends(get_db)):
             "code": l.code,
             "location_type": l.location_type,
             "capacity": l.capacity,
+            "current_stock_count": qty,
             "is_active": l.is_active,
-            "current_stock_quantity": qty
+            "created_at": l.created_at.isoformat() if l.created_at else None
         })
+
     return {
         "status": "success",
+        "total": total,
+        "page": page,
+        "limit": limit,
         "data": result,
         "message": "Locations retrieved successfully",
         "timestamp": utc_now().isoformat()
     }
+
+
+@app.get("/api/v1/locations/{location_id}")
+def get_location_detail(location_id: str, db: Session = Depends(get_db)):
+    logger.debug(f"GET /api/v1/locations/{location_id} called")
+    loc = db.query(models.Location).filter(models.Location.id == location_id).first()
+    if not loc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Location not found.")
+
+    wh = loc.warehouse
+    stocks = db.query(models.Stock).filter(models.Stock.location_id == location_id).all()
+    tot_qty = sum(s.quantity for s in stocks)
+    tot_val = sum(s.quantity * 185.0 for s in stocks)
+
+    stock_items = [
+        {
+            "product": s.product.name if s.product else "Product",
+            "quantity": s.quantity
+        }
+        for s in stocks
+        if s.quantity > 0
+    ]
+
+    return {
+        "status": "success",
+        "data": {
+            "id": loc.id,
+            "warehouse": {
+                "id": wh.id if wh else loc.warehouse_id,
+                "name": wh.name if wh else "Warehouse",
+                "code": wh.code if wh else "WH"
+            },
+            "name": loc.name,
+            "code": loc.code,
+            "location_type": loc.location_type,
+            "capacity": loc.capacity,
+            "current_stock_count": tot_qty,
+            "current_stock_value": f"${tot_val:,.2f}",
+            "is_active": loc.is_active,
+            "stock_items": stock_items,
+            "created_at": loc.created_at.isoformat() if loc.created_at else None
+        },
+        "message": "Location detail retrieved successfully",
+        "timestamp": utc_now().isoformat()
+    }
+
+
+@app.post("/api/v1/warehouses/{warehouse_id}/locations", status_code=status.HTTP_201_CREATED)
+def create_location(warehouse_id: str, loc_in: schemas.LocationCreate, db: Session = Depends(get_db)):
+    logger.debug(f"POST /api/v1/warehouses/{warehouse_id}/locations called with code={loc_in.code}")
+    wh = db.query(models.Warehouse).filter(models.Warehouse.id == warehouse_id).first()
+    if not wh:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Warehouse not found.")
+
+    loc_type_upper = loc_in.location_type.upper()
+    if loc_type_upper not in VALID_LOCATION_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Invalid location_type '{loc_in.location_type}'. Must be one of: RACK, SHELF, BIN, FLOOR, FREEZER"
+        )
+
+    if loc_in.capacity <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Capacity must be greater than 0."
+        )
+
+    existing_code = db.query(models.Location).filter(
+        models.Location.warehouse_id == warehouse_id,
+        models.Location.code.ilike(loc_in.code)
+    ).first()
+    if existing_code:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Location code '{loc_in.code}' already exists in this warehouse."
+        )
+
+    loc = models.Location(
+        warehouse_id=warehouse_id,
+        name=loc_in.name,
+        code=loc_in.code.upper(),
+        location_type=loc_type_upper,
+        capacity=loc_in.capacity,
+        is_active=True,
+        created_at=utc_now()
+    )
+    db.add(loc)
+    db.commit()
+    db.refresh(loc)
+
+    return {
+        "status": "success",
+        "data": {
+            "id": loc.id,
+            "warehouse_id": loc.warehouse_id,
+            "name": loc.name,
+            "code": loc.code,
+            "location_type": loc.location_type,
+            "capacity": loc.capacity,
+            "current_stock_count": 0,
+            "is_active": loc.is_active,
+            "created_at": loc.created_at.isoformat() if loc.created_at else None
+        },
+        "message": "Location created successfully",
+        "timestamp": utc_now().isoformat()
+    }
+
+
+@app.patch("/api/v1/locations/{location_id}")
+def update_location(location_id: str, update_in: schemas.LocationUpdate, db: Session = Depends(get_db)):
+    logger.debug(f"PATCH /api/v1/locations/{location_id} called")
+    loc = db.query(models.Location).filter(models.Location.id == location_id).first()
+    if not loc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Location not found.")
+
+    if update_in.capacity is not None and update_in.capacity <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Capacity must be greater than 0."
+        )
+
+    if update_in.name is not None:
+        loc.name = update_in.name
+    if update_in.capacity is not None:
+        loc.capacity = update_in.capacity
+    if update_in.is_active is not None:
+        loc.is_active = update_in.is_active
+
+    db.commit()
+    db.refresh(loc)
+
+    qty = db.query(func.sum(models.Stock.quantity)).filter(models.Stock.location_id == loc.id).scalar() or 0
+
+    return {
+        "status": "success",
+        "data": {
+            "id": loc.id,
+            "warehouse_id": loc.warehouse_id,
+            "name": loc.name,
+            "code": loc.code,
+            "location_type": loc.location_type,
+            "capacity": loc.capacity,
+            "current_stock_count": qty,
+            "is_active": loc.is_active,
+            "created_at": loc.created_at.isoformat() if loc.created_at else None
+        },
+        "message": "Location updated successfully",
+        "timestamp": utc_now().isoformat()
+    }
+
+
+@app.delete("/api/v1/locations/{location_id}", status_code=status.HTTP_200_OK)
+def delete_location(location_id: str, db: Session = Depends(get_db)):
+    logger.debug(f"DELETE /api/v1/locations/{location_id} called")
+    loc = db.query(models.Location).filter(models.Location.id == location_id).first()
+    if not loc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Location not found.")
+
+    total_qty = db.query(func.sum(models.Stock.quantity)).filter(models.Stock.location_id == location_id).scalar() or 0
+    if total_qty > 0:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Cannot delete location containing active stock ({total_qty} items)."
+        )
+
+    loc.is_active = False
+    db.commit()
+
+    return {
+        "status": "success",
+        "data": None,
+        "message": "Location deactivated successfully",
+        "timestamp": utc_now().isoformat()
+    }
+
+
+@app.get("/api/v1/locations/{location_id}/stock")
+def get_location_stock(location_id: str, db: Session = Depends(get_db)):
+    logger.debug(f"GET /api/v1/locations/{location_id}/stock called")
+    loc = db.query(models.Location).filter(models.Location.id == location_id).first()
+    if not loc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Location not found.")
+
+    stocks = db.query(models.Stock).filter(models.Stock.location_id == location_id, models.Stock.quantity > 0).all()
+    data = [
+        {
+            "product_id": s.product_id,
+            "product_name": s.product.name if s.product else "Product",
+            "sku": s.product.sku if s.product else "SKU-000",
+            "quantity": s.quantity,
+            "unit": s.product.unit_of_measure if s.product else "units",
+            "value": f"${(s.quantity * 185.0):,.2f}"
+        }
+        for s in stocks
+    ]
+
+    return {
+        "status": "success",
+        "data": data,
+        "message": "Location stock items retrieved successfully",
+        "timestamp": utc_now().isoformat()
+    }
+
 
 
 # ==========================================

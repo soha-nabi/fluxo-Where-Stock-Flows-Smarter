@@ -8,6 +8,7 @@ import { InventoryHealthSection } from "@/components/dashboard/InventoryHealthSe
 import { StockMovementChart } from "@/components/dashboard/StockMovementChart";
 import { LiveActivityFeed } from "@/components/dashboard/LiveActivityFeed";
 import { LiveMovementLogTable } from "@/components/dashboard/LiveMovementLogTable";
+import { ElevenLabsVoiceAgentCard } from "@/components/dashboard/ElevenLabsVoiceAgent";
 import { RefreshCw, AlertCircle, Warehouse as WarehouseIcon, Activity } from "lucide-react";
 
 export default function MissionControlDashboard() {
@@ -99,7 +100,6 @@ export default function MissionControlDashboard() {
           </div>
         </div>
 
-
         {/* Error Boundary Notice */}
         {error && (
           <div className="flex items-center justify-between p-4 rounded-2xl bg-red-950/40 border border-red-800/50 text-red-300 text-xs shadow-lg">
@@ -119,8 +119,9 @@ export default function MissionControlDashboard() {
         {/* Hero & Operations Overview */}
         <OperationsOverviewHero />
 
-        {/* Telemetry 3-Column Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        {/* Telemetry 4-Column Grid with ElevenLabs Voice Agent */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+          <ElevenLabsVoiceAgentCard />
           <InventoryHealthSection />
           <StockMovementChart />
           <LiveActivityFeed />

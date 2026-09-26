@@ -25,10 +25,15 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en" className={`${geistSans.variable} ${geistMono.variable} dark antialiased h-full`}>
-      <body className="min-h-full bg-[#090a10] text-[#f4f4f5] font-sans flex flex-col selection:bg-[#7c3aed] selection:text-white">
+    <html
+      lang="en"
+      suppressHydrationWarning
+      className={`${geistSans.variable} ${geistMono.variable} dark antialiased h-full`}
+    >
+      <body className="min-h-full bg-[#090a10] text-[#f4f4f5] font-sans flex flex-col selection:bg-[#7c3aed] selection:text-white" suppressHydrationWarning>
         <ToastProvider>{children}</ToastProvider>
       </body>
     </html>
+
   );
 }

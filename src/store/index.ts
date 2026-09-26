@@ -5,6 +5,7 @@ export * from "./useReceiptStore";
 export * from "./useDeliveryStore";
 export * from "./useTransferStore";
 export * from "./useAdjustmentStore";
+export * from "./useLocationStore";
 
 // Selector helpers for zero re-render overhead state subscriptions
 import { useProductStore } from "./useProductStore";

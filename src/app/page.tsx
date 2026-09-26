@@ -27,6 +27,11 @@ export default function MissionControlDashboard() {
   } = useDashboardStore();
 
   const [lastUpdated, setLastUpdated] = useState<Date>(new Date());
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   // Auto-refresh every 30 seconds & initial fetch
   useEffect(() => {
@@ -77,8 +82,8 @@ export default function MissionControlDashboard() {
           </div>
 
           <div className="flex items-center gap-3 w-full sm:w-auto justify-between sm:justify-end">
-            <span className="text-[11px] text-gray-500 font-mono">
-              Updated: {lastUpdated.toLocaleTimeString()}
+            <span className="text-[11px] text-gray-500 font-mono" suppressHydrationWarning>
+              Updated: {mounted ? lastUpdated.toLocaleTimeString() : "--:--:--"}
             </span>
             <button
               onClick={() => {
@@ -93,6 +98,7 @@ export default function MissionControlDashboard() {
             </button>
           </div>
         </div>
+
 
         {/* Error Boundary Notice */}
         {error && (

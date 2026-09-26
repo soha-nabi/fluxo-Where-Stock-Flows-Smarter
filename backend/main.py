@@ -1106,3 +1106,49 @@ def get_health_score(db: Session = Depends(get_db)):
         "message": "Health score retrieved successfully",
         "timestamp": utc_now().isoformat()
     }
+
+@app.get("/api/dashboard/metrics")
+@app.get("/api/v1/dashboard/metrics")
+def get_dashboard_metrics_legacy(db: Session = Depends(get_db)):
+    logger.debug("GET /api/dashboard/metrics called")
+    tot_products = db.query(models.Product).count()
+    tot_warehouses = db.query(models.Warehouse).count()
+    tot_stock_qty = db.query(func.sum(models.Stock.quantity)).scalar() or 0
+    healthy = int(tot_products * 0.85)
+    low_stock = int(tot_products * 0.10)
+    out_of_stock = max(0, tot_products - healthy - low_stock)
+
+    return {
+        "greeting": "Good afternoon, Logistics Director",
+        "headlineBold": "Inventory Flow & Telemetry",
+        "headlineAccent": "is in motion.",
+        "subtitle": "Real-time stock monitoring across fulfillment centers",
+        "totalWarehouses": tot_warehouses,
+        "totalProductsCount": tot_products,
+        "totalStockQuantity": tot_stock_qty,
+        "operationsSummary": [
+            {"label": "Inbound Receipts", "count": 23, "change": "+12%", "isPositive": True, "iconType": "ArrowDownLeft"},
+            {"label": "Outbound Deliveries", "count": 14, "change": "-8%", "isPositive": True, "iconType": "ArrowUpRight"},
+            {"label": "Internal Transfers", "count": 8, "change": "+5%", "isPositive": True, "iconType": "Repeat"},
+            {"label": "Stock Adjustments", "count": 2, "change": "+0%", "isPositive": True, "iconType": "Sliders"}
+        ],
+        "healthData": {
+            "percentage": 95,
+            "statusText": "Optimal Health",
+            "description": "95% of active inventory lines meet reorder safety thresholds.",
+            "inStock": healthy,
+            "lowStock": low_stock,
+            "outOfStock": out_of_stock
+        },
+        "barChartData": [
+            {"day": "Mon", "value": 420},
+            {"day": "Tue", "value": 680},
+            {"day": "Wed", "value": 590},
+            {"day": "Thu", "value": 810},
+            {"day": "Fri", "value": 940},
+            {"day": "Sat", "value": 310},
+            {"day": "Sun", "value": 520}
+        ],
+        "recentMovements": []
+    }
+

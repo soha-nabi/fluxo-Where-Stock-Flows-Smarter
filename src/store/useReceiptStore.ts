@@ -24,6 +24,7 @@ interface ReceiptState {
   ) => Promise<Receipt | void>;
   validateReceipt: (id: string) => Promise<Receipt | void>;
   completeReceipt: (id: string) => Promise<Receipt | void>;
+  deleteReceipt: (id: string) => Promise<void>;
   updateReceipt: (id: string, data: Partial<ReceiptInput>) => Promise<Receipt | void>;
   setSelectedReceipt: (receipt: Receipt | null) => void;
   clearError: () => void;
@@ -233,6 +234,30 @@ export const useReceiptStore = create<ReceiptState>((set, get) => ({
       const errorMessage = err?.message || "Failed to complete receipt.";
       if (process.env.NODE_ENV === "development") {
         console.error("[ReceiptStore] completeReceipt Error. Rolling back state.", err);
+      }
+      set({ receipts: previousReceipts, selectedReceipt: previousSelected, error: errorMessage });
+    }
+  },
+
+  deleteReceipt: async (id: string) => {
+    const previousReceipts = get().receipts;
+    const previousSelected = get().selectedReceipt;
+
+    set((state) => ({
+      receipts: state.receipts.filter((r) => r.id !== id),
+      selectedReceipt: state.selectedReceipt?.id === id ? null : state.selectedReceipt,
+      error: null,
+    }));
+
+    try {
+      if (process.env.NODE_ENV === "development") {
+        console.log("[ReceiptStore] Optimistically deleting receipt:", id);
+      }
+      await receiptsApi.deleteReceipt(id);
+    } catch (err: any) {
+      const errorMessage = err?.message || "Failed to delete receipt.";
+      if (process.env.NODE_ENV === "development") {
+        console.error("[ReceiptStore] deleteReceipt Error. Rolling back state.", err);
       }
       set({ receipts: previousReceipts, selectedReceipt: previousSelected, error: errorMessage });
     }

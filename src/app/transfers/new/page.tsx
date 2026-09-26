@@ -46,7 +46,7 @@ export default function CreateTransferPage() {
 
   const selectedProduct = products.find((p) => p.id === selectedProductId);
   const availableStock = selectedProduct?.total_stock || 0;
-  const isSameWarehouse = fromWarehouseId && toWarehouseId && fromWarehouseId === toWarehouseId;
+  const isSameWarehouse = Boolean(fromWarehouseId && toWarehouseId && fromWarehouseId === toWarehouseId);
   const isOverQuantity = quantity > availableStock;
 
   const handleSubmit = async (e: React.FormEvent) => {

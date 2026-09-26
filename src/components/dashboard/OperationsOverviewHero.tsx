@@ -54,17 +54,15 @@ export function OperationsOverviewHero() {
               <Sun className="w-3.5 h-3.5 text-amber-400" />
               <span>{hero.greeting}</span>
             </div>
-            {metrics && (
-              <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-mono bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                <Database className="w-3 h-3 text-emerald-400" />
-                POSTGRES LIVE
-              </span>
-            )}
+            <span className="inline-flex items-center gap-2 px-3 py-1 rounded-full text-[10px] font-mono font-bold bg-emerald-950/70 text-emerald-300 border border-emerald-800/60 shadow-[0_0_12px_rgba(16,185,129,0.25)]">
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shadow-[0_0_8px_rgba(16,185,129,0.8)]" />
+              POSTGRES LIVE
+            </span>
           </div>
 
           <h1 className="text-4xl sm:text-5xl lg:text-6xl font-extrabold tracking-tight text-white leading-[1.1]">
             {hero.headlineBold}{" "}
-            <span className="bg-gradient-to-r from-[#a855f7] via-[#c084fc] to-[#e879f9] bg-clip-text text-transparent drop-shadow-[0_0_25px_rgba(168,85,247,0.5)]">
+            <span className="bg-gradient-to-r from-purple-400 via-indigo-400 to-cyan-400 bg-clip-text text-transparent drop-shadow-[0_0_30px_rgba(6,182,212,0.5)]">
               {hero.headlineAccent}
             </span>
           </h1>

@@ -2,7 +2,8 @@
 "use client";
 
 import React from "react";
-import { Search, MapPin, Bell, ChevronDown, Menu } from "lucide-react";
+import { Search, MapPin, Bell, ChevronDown, Menu, Database } from "lucide-react";
+import { useStore } from "@/store";
 
 interface HeaderProps {
   onOpenSearch: () => void;
@@ -10,6 +11,8 @@ interface HeaderProps {
 }
 
 export function Header({ onOpenSearch, onMobileToggle }: HeaderProps) {
+  const { selectedWarehouse, setSelectedWarehouse } = useStore();
+
   return (
     <header className="h-16 px-4 lg:px-8 border-b border-[#1e202e] bg-[#090a10]/80 backdrop-blur-xl sticky top-0 z-20 flex items-center justify-between gap-4 select-none">
       {/* Left side: Mobile Toggle & Global Search */}
@@ -36,23 +39,31 @@ export function Header({ onOpenSearch, onMobileToggle }: HeaderProps) {
         </div>
       </div>
 
-      {/* Right side: Warehouse selector, notifications, user avatar */}
+      {/* Right side: Live System Status, Warehouse selector, notifications, user avatar */}
       <div className="flex items-center gap-3">
+        {/* POSTGRES LIVE Indicator */}
+        <div className="hidden sm:flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-950/60 border border-emerald-800/60 text-emerald-300 text-[10px] font-mono font-bold shadow-[0_0_12px_rgba(16,185,129,0.2)]">
+          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shadow-[0_0_8px_rgba(16,185,129,0.8)]" />
+          <span>POSTGRES LIVE</span>
+        </div>
+
         {/* Warehouse Dropdown */}
-        <button className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-[#12141f] border border-[#1e202e] hover:border-[#2f334d] text-xs font-medium text-gray-300 hover:text-white transition-all">
+        <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-[#12141f] border border-[#1e202e] text-xs font-medium text-gray-300">
           <MapPin className="w-3.5 h-3.5 text-purple-400" />
-          <span>All Warehouses</span>
-          <ChevronDown className="w-3.5 h-3.5 text-gray-400" />
-        </button>
+          <span className="font-semibold text-white">
+            {selectedWarehouse ? selectedWarehouse.name : "All Warehouses"}
+          </span>
+        </div>
 
         {/* Notifications */}
         <button className="p-2 rounded-xl bg-[#12141f] border border-[#1e202e] text-gray-400 hover:text-white hover:bg-[#1c1f30] transition-colors relative">
           <Bell className="w-4 h-4" />
-          <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-rose-500 ring-2 ring-[#090a10]" />
+          <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-purple-500 ring-2 ring-[#090a10] animate-ping" />
+          <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-purple-500 ring-2 ring-[#090a10]" />
         </button>
 
         {/* Profile Avatar */}
-        <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-purple-500 to-pink-500 p-0.5 shadow-lg cursor-pointer hover:scale-105 transition-transform">
+        <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-purple-500 to-indigo-500 p-0.5 shadow-lg cursor-pointer hover:scale-105 transition-transform">
           <div className="w-full h-full rounded-full bg-[#12141f] flex items-center justify-center font-bold text-xs text-white">
             SN
           </div>

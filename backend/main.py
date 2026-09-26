@@ -704,9 +704,30 @@ def complete_receipt(receipt_id: str, db: Session = Depends(get_db)):
     }
 
 
+@app.delete("/api/v1/receipts/{receipt_id}", status_code=status.HTTP_200_OK)
+def delete_receipt(receipt_id: str, db: Session = Depends(get_db)):
+    logger.debug(f"DELETE /api/v1/receipts/{receipt_id} called")
+    rcp = db.query(models.Receipt).filter(models.Receipt.id == receipt_id).first()
+    if not rcp:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Receipt not found.")
+    if rcp.status == "COMPLETED":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot delete completed receipt.")
+
+    db.query(models.ReceiptItem).filter(models.ReceiptItem.receipt_id == receipt_id).delete()
+    db.delete(rcp)
+    db.commit()
+    return {
+        "status": "success",
+        "data": None,
+        "message": "Receipt deleted",
+        "timestamp": utc_now().isoformat()
+    }
+
+
 # ==========================================
 # 6. DELIVERIES API
 # ==========================================
+
 
 @app.post("/api/v1/deliveries", status_code=status.HTTP_201_CREATED)
 def create_delivery(delivery_in: schemas.DeliveryCreate, db: Session = Depends(get_db)):
@@ -850,55 +871,404 @@ def ship_delivery(delivery_id: str, db: Session = Depends(get_db)):
     }
 
 
-# ==========================================
-# 7. INTERNAL TRANSFERS API
-# ==========================================
+@app.get("/api/v1/deliveries/{delivery_id}")
+def get_delivery_detail(delivery_id: str, db: Session = Depends(get_db)):
+    logger.debug(f"GET /api/v1/deliveries/{delivery_id} called")
+    dlv = db.query(models.Delivery).filter(models.Delivery.id == delivery_id).first()
+    if not dlv:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Delivery not found.")
 
-@app.post("/api/v1/transfers", status_code=status.HTTP_201_CREATED)
-def create_transfer(transfer_in: schemas.TransferCreate, db: Session = Depends(get_db)):
-    logger.debug(f"POST /api/v1/transfers called")
-    stock = db.query(models.Stock).filter(
-        models.Stock.product_id == transfer_in.product_id,
-        models.Stock.warehouse_id == transfer_in.from_warehouse_id
-    ).first()
+    items_out = [
+        {
+            "id": i.id,
+            "product_id": i.product_id,
+            "product_name": i.product.name if i.product else "Item",
+            "quantity_ordered": i.quantity_ordered,
+            "quantity_picked": i.quantity_picked or 0,
+            "quantity_packed": i.quantity_packed or 0,
+            "quantity_shipped": i.quantity_shipped or 0,
+            "status": i.status
+        }
+        for i in dlv.items
+    ]
 
-    avail = stock.quantity_available if stock else 0
-    if avail < transfer_in.quantity:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Insufficient stock at source warehouse.")
-
-    trn_cnt = db.query(models.InternalTransfer).count() + 1
-    trn_num = f"TRN-2026-{trn_cnt:03d}"
-
-    trn = models.InternalTransfer(
-        transfer_number=trn_num,
-        product_id=transfer_in.product_id,
-        from_warehouse_id=transfer_in.from_warehouse_id,
-        to_warehouse_id=transfer_in.to_warehouse_id,
-        from_location_id=transfer_in.from_location_id,
-        to_location_id=transfer_in.to_location_id,
-        quantity=transfer_in.quantity,
-        status="PENDING",
-        created_by="OpsAdmin",
-        notes=transfer_in.notes
-    )
-    db.add(trn)
-    db.commit()
-    db.refresh(trn)
     return {
         "status": "success",
         "data": {
-            "id": trn.id,
-            "transfer_number": trn.transfer_number,
-            "status": trn.status
+            "id": dlv.id,
+            "delivery_number": dlv.delivery_number,
+            "customer_id": dlv.customer_id,
+            "warehouse_id": dlv.warehouse_id,
+            "warehouse_name": dlv.warehouse.name if dlv.warehouse else "Warehouse",
+            "status": dlv.status,
+            "order_date": dlv.order_date.isoformat() if dlv.order_date else None,
+            "planned_delivery_date": dlv.planned_delivery_date.isoformat() if dlv.planned_delivery_date else None,
+            "actual_delivery_date": dlv.actual_delivery_date.isoformat() if dlv.actual_delivery_date else None,
+            "notes": dlv.notes,
+            "items": items_out
         },
-        "message": "Transfer initiated",
+        "message": "Delivery details retrieved successfully",
         "timestamp": utc_now().isoformat()
     }
+
+
+@app.post("/api/v1/deliveries/{delivery_id}/pick-items")
+def pick_delivery_items(delivery_id: str, items: List[schemas.DeliveryPickInput], db: Session = Depends(get_db)):
+    logger.debug(f"POST /api/v1/deliveries/{delivery_id}/pick-items called")
+    dlv = db.query(models.Delivery).filter(models.Delivery.id == delivery_id).first()
+    if not dlv:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Delivery not found.")
+
+    for input_item in items:
+        item = db.query(models.DeliveryItem).filter(models.DeliveryItem.id == input_item.delivery_item_id).first()
+        if item:
+            item.quantity_picked = input_item.quantity_picked
+            item.status = "PICKED"
+
+    dlv.status = "PICKED"
+    db.commit()
+    return {
+        "status": "success",
+        "data": {"id": dlv.id, "status": dlv.status},
+        "message": "Items picked",
+        "timestamp": utc_now().isoformat()
+    }
+
+
+@app.post("/api/v1/deliveries/{delivery_id}/pack-items")
+def pack_delivery_items(delivery_id: str, items: List[schemas.DeliveryPackInput], db: Session = Depends(get_db)):
+    logger.debug(f"POST /api/v1/deliveries/{delivery_id}/pack-items called")
+    dlv = db.query(models.Delivery).filter(models.Delivery.id == delivery_id).first()
+    if not dlv:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Delivery not found.")
+
+    for input_item in items:
+        item = db.query(models.DeliveryItem).filter(models.DeliveryItem.id == input_item.delivery_item_id).first()
+        if item:
+            item.quantity_packed = input_item.quantity_packed
+            item.status = "PACKED"
+
+    dlv.status = "PACKED"
+    db.commit()
+    return {
+        "status": "success",
+        "data": {"id": dlv.id, "status": dlv.status},
+        "message": "Items packed",
+        "timestamp": utc_now().isoformat()
+    }
+
+
+@app.post("/api/v1/deliveries/{delivery_id}/cancel")
+def cancel_delivery(delivery_id: str, db: Session = Depends(get_db)):
+    logger.debug(f"POST /api/v1/deliveries/{delivery_id}/cancel called")
+    dlv = db.query(models.Delivery).filter(models.Delivery.id == delivery_id).first()
+    if not dlv:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Delivery not found.")
+    if dlv.status in ["SHIPPED", "DELIVERED"]:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot cancel already shipped delivery.")
+
+    # Unreserve stock
+    for item in dlv.items:
+        stock = db.query(models.Stock).filter(
+            models.Stock.product_id == item.product_id,
+            models.Stock.warehouse_id == dlv.warehouse_id
+        ).first()
+        if stock:
+            stock.quantity_reserved = max(0, stock.quantity_reserved - item.quantity_ordered)
+
+    dlv.status = "CANCELLED"
+    db.commit()
+    return {
+        "status": "success",
+        "data": {"id": dlv.id, "status": dlv.status},
+        "message": "Delivery cancelled and reserved stock released",
+        "timestamp": utc_now().isoformat()
+    }
+
+
+
+@app.post("/api/v1/transfers", status_code=status.HTTP_201_CREATED)
+def create_transfer(tr_in: schemas.TransferCreate, db: Session = Depends(get_db)):
+    logger.debug(f"POST /api/v1/transfers called")
+    tr_cnt = db.query(models.InternalTransfer).count() + 1
+    tr_num = f"TRF-2026-{tr_cnt:03d}"
+
+    t = models.InternalTransfer(
+        transfer_number=tr_num,
+        product_id=tr_in.product_id,
+        from_warehouse_id=tr_in.from_warehouse_id,
+        to_warehouse_id=tr_in.to_warehouse_id,
+        from_location_id=tr_in.from_location_id,
+        to_location_id=tr_in.to_location_id,
+        quantity=tr_in.quantity,
+        status="DRAFT",
+        initiated_date=utc_now(),
+        notes=tr_in.notes,
+        created_by="OpsAdmin"
+    )
+    db.add(t)
+    db.commit()
+    db.refresh(t)
+    return {
+        "status": "success",
+        "data": {
+            "id": t.id,
+            "transfer_number": t.transfer_number,
+            "status": t.status
+        },
+        "message": "Transfer draft created",
+        "timestamp": utc_now().isoformat()
+    }
+
+
+@app.get("/api/v1/transfers")
+def get_transfers(
+    status_filter: Optional[str] = Query(None, alias="status"),
+    db: Session = Depends(get_db)
+):
+    logger.debug("GET /api/v1/transfers called")
+    query = db.query(models.InternalTransfer)
+    if status_filter and status_filter != "ALL":
+        query = query.filter(models.InternalTransfer.status == status_filter)
+
+    transfers = query.order_by(desc(models.InternalTransfer.created_at)).all()
+    result = []
+    for t in transfers:
+        from_wh = db.query(models.Warehouse).filter(models.Warehouse.id == t.from_warehouse_id).first()
+        to_wh = db.query(models.Warehouse).filter(models.Warehouse.id == t.to_warehouse_id).first()
+        result.append({
+            "id": t.id,
+            "transfer_number": t.transfer_number,
+            "product_id": t.product_id,
+            "product_name": t.product.name if t.product else "Product",
+            "from_warehouse_id": t.from_warehouse_id,
+            "from_warehouse_name": from_wh.name if from_wh else "Source Hub",
+            "to_warehouse_id": t.to_warehouse_id,
+            "to_warehouse_name": to_wh.name if to_wh else "Target Hub",
+            "quantity": t.quantity,
+            "status": t.status,
+            "initiated_date": t.initiated_date.isoformat() if t.initiated_date else None,
+            "created_by": t.created_by,
+            "notes": t.notes
+        })
+    return {
+        "status": "success",
+        "data": result,
+        "message": "Transfers retrieved successfully",
+        "timestamp": utc_now().isoformat()
+    }
+
+
+@app.get("/api/v1/transfers/{transfer_id}")
+def get_transfer_detail(transfer_id: str, db: Session = Depends(get_db)):
+    logger.debug(f"GET /api/v1/transfers/{transfer_id} called")
+    t = db.query(models.InternalTransfer).filter(models.InternalTransfer.id == transfer_id).first()
+    if not t:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Transfer record not found.")
+
+    from_wh = db.query(models.Warehouse).filter(models.Warehouse.id == t.from_warehouse_id).first()
+    to_wh = db.query(models.Warehouse).filter(models.Warehouse.id == t.to_warehouse_id).first()
+
+    return {
+        "status": "success",
+        "data": {
+            "id": t.id,
+            "transfer_number": t.transfer_number,
+            "product_id": t.product_id,
+            "product_name": t.product.name if t.product else "Product",
+            "from_warehouse_id": t.from_warehouse_id,
+            "from_warehouse_name": from_wh.name if from_wh else "Source Hub",
+            "to_warehouse_id": t.to_warehouse_id,
+            "to_warehouse_name": to_wh.name if to_wh else "Target Hub",
+            "quantity": t.quantity,
+            "status": t.status,
+            "initiated_date": t.initiated_date.isoformat() if t.initiated_date else None,
+            "completed_date": t.completed_date.isoformat() if t.completed_date else None,
+            "created_by": t.created_by,
+            "notes": t.notes
+        },
+        "message": "Transfer detail retrieved successfully",
+        "timestamp": utc_now().isoformat()
+    }
+
+
+@app.post("/api/v1/transfers/{transfer_id}/approve")
+def approve_transfer(transfer_id: str, db: Session = Depends(get_db)):
+    logger.debug(f"POST /api/v1/transfers/{transfer_id}/approve called")
+    t = db.query(models.InternalTransfer).filter(models.InternalTransfer.id == transfer_id).first()
+    if not t:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Transfer record not found.")
+    t.status = "IN_TRANSIT"
+    db.commit()
+    return {
+        "status": "success",
+        "data": {"id": t.id, "status": t.status},
+        "message": "Transfer approved and in transit",
+        "timestamp": utc_now().isoformat()
+    }
+
+
+@app.post("/api/v1/transfers/{transfer_id}/complete")
+def complete_transfer(transfer_id: str, db: Session = Depends(get_db)):
+    logger.debug(f"POST /api/v1/transfers/{transfer_id}/complete called")
+    t = db.query(models.InternalTransfer).filter(models.InternalTransfer.id == transfer_id).first()
+    if not t:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Transfer record not found.")
+
+    # Deduct stock from source warehouse
+    src_stock = db.query(models.Stock).filter(
+        models.Stock.product_id == t.product_id,
+        models.Stock.warehouse_id == t.from_warehouse_id
+    ).first()
+    src_before = src_stock.quantity if src_stock else 0
+    if src_stock:
+        src_stock.quantity = max(0, src_stock.quantity - t.quantity)
+
+    # Add stock to target warehouse
+    dest_stock = db.query(models.Stock).filter(
+        models.Stock.product_id == t.product_id,
+        models.Stock.warehouse_id == t.to_warehouse_id
+    ).first()
+    dest_before = dest_stock.quantity if dest_stock else 0
+    if dest_stock:
+        dest_stock.quantity += t.quantity
+    else:
+        dest_stock = models.Stock(
+            product_id=t.product_id,
+            warehouse_id=t.to_warehouse_id,
+            quantity=t.quantity
+        )
+        db.add(dest_stock)
+
+    # Stock ledger entries
+    l1 = models.StockLedger(
+        product_id=t.product_id,
+        warehouse_id=t.from_warehouse_id,
+        operation_type="TRANSFER",
+        quantity_before=src_before,
+        quantity_after=src_before - t.quantity,
+        reference_type="TRANSFER",
+        reference_id=t.id,
+        reference_number=t.transfer_number,
+        notes=f"Transferred to {t.to_warehouse_id}",
+        created_by="OpsAdmin"
+    )
+    l2 = models.StockLedger(
+        product_id=t.product_id,
+        warehouse_id=t.to_warehouse_id,
+        operation_type="TRANSFER",
+        quantity_before=dest_before,
+        quantity_after=dest_before + t.quantity,
+        reference_type="TRANSFER",
+        reference_id=t.id,
+        reference_number=t.transfer_number,
+        notes=f"Transferred from {t.from_warehouse_id}",
+        created_by="OpsAdmin"
+    )
+    db.add(l1)
+    db.add(l2)
+
+    t.status = "COMPLETED"
+    t.completed_date = utc_now()
+    db.commit()
+    return {
+        "status": "success",
+        "data": {"id": t.id, "status": t.status},
+        "message": "Transfer completed and inventory moved",
+        "timestamp": utc_now().isoformat()
+    }
+
+
+@app.post("/api/v1/transfers/{transfer_id}/cancel")
+def cancel_transfer(transfer_id: str, db: Session = Depends(get_db)):
+    logger.debug(f"POST /api/v1/transfers/{transfer_id}/cancel called")
+    t = db.query(models.InternalTransfer).filter(models.InternalTransfer.id == transfer_id).first()
+    if not t:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Transfer record not found.")
+    t.status = "CANCELLED"
+    db.commit()
+    return {
+        "status": "success",
+        "data": {"id": t.id, "status": t.status},
+        "message": "Transfer cancelled",
+        "timestamp": utc_now().isoformat()
+    }
+
 
 
 # ==========================================
 # 8. ADJUSTMENTS API
 # ==========================================
+
+@app.get("/api/v1/adjustments")
+def get_adjustments(
+    warehouse_id: Optional[str] = None,
+    status_filter: Optional[str] = Query(None, alias="status"),
+    reason: Optional[str] = None,
+    db: Session = Depends(get_db)
+):
+    logger.debug("GET /api/v1/adjustments called")
+    query = db.query(models.StockAdjustment)
+    if warehouse_id:
+        query = query.filter(models.StockAdjustment.warehouse_id == warehouse_id)
+    if status_filter and status_filter != "ALL":
+        query = query.filter(models.StockAdjustment.status == status_filter)
+    if reason and reason != "ALL":
+        query = query.filter(models.StockAdjustment.reason == reason)
+
+    adjustments = query.order_by(desc(models.StockAdjustment.created_at)).all()
+    result = []
+    for a in adjustments:
+        result.append({
+            "id": a.id,
+            "adjustment_number": a.adjustment_number,
+            "product_id": a.product_id,
+            "product_name": a.product.name if a.product else "Product",
+            "warehouse_id": a.warehouse_id,
+            "quantity_before": a.quantity_before,
+            "quantity_after": a.quantity_after,
+            "quantity_diff": a.quantity_diff,
+            "reason": a.reason,
+            "status": a.status,
+            "created_by": a.created_by,
+            "created_at": a.created_at.isoformat() if a.created_at else None
+        })
+    return {
+        "status": "success",
+        "data": result,
+        "message": "Adjustments retrieved successfully",
+        "timestamp": utc_now().isoformat()
+    }
+
+
+@app.get("/api/v1/adjustments/{adjustment_id}")
+def get_adjustment_detail(adjustment_id: str, db: Session = Depends(get_db)):
+    logger.debug(f"GET /api/v1/adjustments/{adjustment_id} called")
+    adj = db.query(models.StockAdjustment).filter(models.StockAdjustment.id == adjustment_id).first()
+    if not adj:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Adjustment record not found.")
+
+    return {
+        "status": "success",
+        "data": {
+            "id": adj.id,
+            "adjustment_number": adj.adjustment_number,
+            "product_id": adj.product_id,
+            "product_name": adj.product.name if adj.product else "Product",
+            "warehouse_id": adj.warehouse_id,
+            "quantity_before": adj.quantity_before,
+            "quantity_after": adj.quantity_after,
+            "quantity_diff": adj.quantity_diff,
+            "reason": adj.reason,
+            "status": adj.status,
+            "notes": adj.notes,
+            "created_by": adj.created_by,
+            "created_at": adj.created_at.isoformat() if adj.created_at else None
+        },
+        "message": "Adjustment detail retrieved successfully",
+        "timestamp": utc_now().isoformat()
+    }
+
 
 @app.post("/api/v1/adjustments", status_code=status.HTTP_201_CREATED)
 def create_adjustment(adj_in: schemas.AdjustmentCreate, db: Session = Depends(get_db)):
@@ -937,6 +1307,89 @@ def create_adjustment(adj_in: schemas.AdjustmentCreate, db: Session = Depends(ge
         "message": "Adjustment draft created",
         "timestamp": utc_now().isoformat()
     }
+
+
+@app.post("/api/v1/adjustments/{adjustment_id}/approve")
+def approve_adjustment(adjustment_id: str, db: Session = Depends(get_db)):
+    logger.debug(f"POST /api/v1/adjustments/{adjustment_id}/approve called")
+    adj = db.query(models.StockAdjustment).filter(models.StockAdjustment.id == adjustment_id).first()
+    if not adj:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Adjustment record not found.")
+
+    adj.status = "APPROVED"
+    db.commit()
+    return {
+        "status": "success",
+        "data": {"id": adj.id, "status": adj.status},
+        "message": "Adjustment approved",
+        "timestamp": utc_now().isoformat()
+    }
+
+
+@app.post("/api/v1/adjustments/{adjustment_id}/reject")
+def reject_adjustment(adjustment_id: str, db: Session = Depends(get_db)):
+    logger.debug(f"POST /api/v1/adjustments/{adjustment_id}/reject called")
+    adj = db.query(models.StockAdjustment).filter(models.StockAdjustment.id == adjustment_id).first()
+    if not adj:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Adjustment record not found.")
+
+    adj.status = "REJECTED"
+    db.commit()
+    return {
+        "status": "success",
+        "data": {"id": adj.id, "status": adj.status},
+        "message": "Adjustment rejected",
+        "timestamp": utc_now().isoformat()
+    }
+
+
+@app.post("/api/v1/adjustments/{adjustment_id}/execute")
+def execute_adjustment(adjustment_id: str, db: Session = Depends(get_db)):
+    logger.debug(f"POST /api/v1/adjustments/{adjustment_id}/execute called")
+    adj = db.query(models.StockAdjustment).filter(models.StockAdjustment.id == adjustment_id).first()
+    if not adj:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Adjustment record not found.")
+
+    stock = db.query(models.Stock).filter(
+        models.Stock.product_id == adj.product_id,
+        models.Stock.warehouse_id == adj.warehouse_id
+    ).first()
+
+    qty_before = stock.quantity if stock else 0
+    if stock:
+        stock.quantity = adj.quantity_after
+    else:
+        stock = models.Stock(
+            product_id=adj.product_id,
+            warehouse_id=adj.warehouse_id,
+            quantity=adj.quantity_after
+        )
+        db.add(stock)
+
+    ledger = models.StockLedger(
+        product_id=adj.product_id,
+        warehouse_id=adj.warehouse_id,
+        operation_type="ADJUSTMENT",
+        quantity_before=qty_before,
+        quantity_after=adj.quantity_after,
+        reference_type="ADJUSTMENT",
+        reference_id=adj.id,
+        reference_number=adj.adjustment_number,
+        notes=f"Adjustment executed for reason {adj.reason}",
+        created_by="OpsAdmin"
+    )
+    db.add(ledger)
+
+    adj.status = "EXECUTED"
+    db.commit()
+    return {
+        "status": "success",
+        "data": {"id": adj.id, "status": adj.status},
+        "message": "Adjustment executed and stock updated",
+        "timestamp": utc_now().isoformat()
+    }
+
+
 
 
 # ==========================================
